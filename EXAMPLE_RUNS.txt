@@ -1,0 +1,15 @@
+UW ULP samples (LuCaP + HD anchors):
+
+python Keraon.py -i /fh/fast/ha_g/user/rpatton/UW-ULP_data/Triton_ATAC/results/TritonCompositeFM.tsv -t keys/UW-ULP_TFX_Subtype.tsv -r /fh/fast/ha_g/user/rpatton/LuCaP_data/Triton_ATAC/results/TritonCompositeFM.tsv /fh/fast/ha_g/user/rpatton/HD_data/Triton_ATAC/results/TritonCompositeFM.tsv -k keys/ARPC-NEPC-Healthy_ReferencePhenotypes.tsv
+
+UW WGS samples (LuCaP + HD anchors):
+
+python Keraon.py -i /fh/fast/ha_g/user/rpatton/UW-WGS_data/Triton_ATAC/results/TritonCompositeFM.tsv -t keys/UW-WGS_TFX_Subtype.tsv -r /fh/fast/ha_g/user/rpatton/LuCaP_data/Triton_ATAC/results/TritonCompositeFM.tsv /fh/fast/ha_g/user/rpatton/HD_data/Triton_ATAC/results/TritonCompositeFM.tsv -k keys/ARPC-NEPC-Healthy_ReferencePhenotypes.tsv
+
+Pluvicto ULP samples (LuCaP + HD anchors):
+
+Pluvicto WGS samples (LuCaP + HD anchors):
+
+TAN cfDNA samples (LuCaP + HD anchors):
+
+Simulation:
