@@ -6,6 +6,7 @@ NEPC	#CC3311
 NElow	#EE7733
 AMPC	#332288
 Mixed	#AA4499
+MIX	#AA4499
 Luminal	#33BBEE
 Basal	#EE7733
 -	#33BBEE
@@ -15,3 +16,4 @@ v7-high	#EE7733
 NonDiff	#BBBBBB
 Patient	#EE3377
 Unknown	#DDAA33
+OffTarget	#DDAA33
