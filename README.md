@@ -2,7 +2,7 @@
 As a tool for cancer subtype prediction, Keraon uses features derived from cell-free DNA (cfDNA) in conjunction
 with PDX reference models to perform both classification and heterogenous phenotype fraction estimation.
 
-_Keraon_ (Ceraon) is named for the Greek god of the ritualistic mixing of wine.
+_Keraon_ (Ceraon) is named for the Greek god of the ritualistic mixing of wine.  
 Like Keraon, this tool knows what went into the mix.
 <br/><br/>
 
