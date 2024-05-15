@@ -1,95 +1,99 @@
 #!/usr/bin/python
 # Robert Patton, rpatton@fredhutch.org
-# v2.0, 11/08/2023
-
-"""
-This module contains helper functions for feature selection and analyses for Keraon.
-"""
+# v2.2, 5/2/2024
 
 import itertools
 import numpy as np
 import pandas as pd
 from sklearn import metrics
 from scipy.stats import shapiro
+from scipy.special import logsumexp, softmax
+from scipy.stats import multivariate_normal
+from scipy.spatial.distance import pdist
+
+from multiprocessing import Pool
+
 
 def is_positive_semi_definite(matrix):
-    eigenvalues = np.linalg.eigvalsh(matrix)
-    return np.all(eigenvalues >= 0)
+    try:
+        eigenvalues = np.linalg.eigvalsh(matrix)
+        return np.all(eigenvalues >= 0)
+    except np.linalg.LinAlgError:
+        return False
 
-# def scale_features(df: pd.DataFrame, stdev_dict: dict = None) -> tuple:
-#     """
-#     Scale features based on the largest standard deviation in each group to ensure equal weighting and "unitless" comparison between
-#     feature types. If a standard deviation dictionary is supplied, use the values to scale the features (for use in scaling test samples).
-#     Can be thought of as scaling by "the weakest link" without shifting any means.
+def calculate_log_likelihoods(tfx, feature_vals, mu_healthy, cov_healthy, mu_subs, subtypes):
+    """
+    Calculate log likelihoods for given TFX value and feature values.
+    """
+    log_likelihoods = []
+    for subtype in subtypes:
+        mu_mixture = tfx * mu_subs[subtypes.index(subtype)] + (1 - tfx) * mu_healthy
+        cov_mixture = np.eye(cov_healthy.shape[0])
+        log_likelihood = multivariate_normal.logpdf(feature_vals, mean=mu_mixture, cov=cov_mixture)
+        log_likelihoods.append(log_likelihood)
+    return log_likelihoods
 
-#     Parameters:
-#        df (pd.DataFrame): The dataframe containing the features to scale.
-#        stdev_dict (dict): A dictionary of the largest anchor standard deviations for each feature.
+def optimize_tfx(feature_vals, mu_healthy, cov_healthy, mu_subs, subtypes):
+    """
+    Optimize 'TFX' to maximize total log likelihood.
+    """
+    best_tfx = 0
+    best_ll = float('inf')
 
-#     Returns:
-#        df (pd.DataFrame): The dataframe with the scaled features.
-#        stdev_dict (dict): The dictionary of the largest anchor standard deviations for each feature.
-#     """
-#     # If no standard deviation dictionary is supplied, calculate it
-#     print('Scaling features "by their weakest link" . . .')
-#     if stdev_dict is None:
-#         stdev_dict = {}
-#         for column in df.columns:
-#             if column == 'Subtype':
-#                 continue
-#             for subtype in df['Subtype'].unique():
-#                 stdev = np.nanstd(df.loc[df['Subtype'] == subtype, column].values)
-#                 if column not in stdev_dict or stdev > stdev_dict[column]:
-#                     stdev_dict[column] = stdev
+    for try_tfx in np.arange(0, 1.001, 0.001):
+        log_likelihoods = calculate_log_likelihoods(try_tfx, feature_vals, mu_healthy, cov_healthy, mu_subs, subtypes)
+        ll = -np.sum(np.exp(log_likelihoods))
+        if ll < best_ll:
+            best_ll = ll
+            best_tfx = try_tfx
 
-#     # Scale the features in the dataframe
-#     for column in df.columns:
-#         if column != 'Subtype' and column in stdev_dict:
-#             df[column] /= stdev_dict[column]
+    return best_tfx
 
-#     return df, stdev_dict
+def update_predictions(predictions, sample, tfx, tfx_shifted, log_likelihoods, subtypes):
+    """
+    Update predictions DataFrame with calculated values.
+    """
+    weights = softmax(log_likelihoods)
 
+    predictions.loc[sample, 'TFX'] = tfx
+    predictions.loc[sample, 'TFX_shifted'] = tfx_shifted
+    max_weight = 0
+    max_subtype = 'NoSolution'
+    for subtype in subtypes:
+        weight = np.round(weights[subtypes.index(subtype)], 4)
+        predictions.loc[sample, subtype] = weight
+        if weight > max_weight:
+            max_weight = weight
+            max_subtype = subtype
 
-# def class_standardize(df: pd.DataFrame, mean_dict: dict = None, stdev_dict: dict = None, ref='All') -> tuple:
-#     """
-#     Standardize features based on a specific class (e.g., the mean and standard deviation of a reference class).
+    predictions.loc[sample, 'Prediction'] = max_subtype
 
-#     Parameters:
-#        df (pd.DataFrame): The dataframe containing the features to scale.
-#        stdev_dict (dict): A dictionary of the largest anchor standard deviations for each feature.
+def gram_schmidt(vectors):
+    """
+    Perform the Gram-Schmidt process to orthogonalize a set of vectors.
+    """
+    basis = []
+    for v in vectors:
+        w = v - sum(np.dot(v,b)*b for b in basis)
+        basis.append(w/np.linalg.norm(w))
+    return np.array(basis)
 
-#     Returns:
-#        df (pd.DataFrame): The dataframe with the scaled features.
-#        stdev_dict (dict): The dictionary of the largest anchor standard deviations for each feature.
-#     """
-#     # If no standard deviation dictionary is supplied, calculate it
-#     print('Standardizing features by ' + ref + ' . . .')
-#     if mean_dict is None or stdev_dict is None:
-#         mean_dict, stdev_dict = {}, {}
-#         for column in df.columns:
-#             if column == 'Subtype':
-#                 continue
-#             if ref == 'All':
-#                 mean_dict[column] = np.nanmean(df[column].values)
-#                 stdev_dict[column] = np.nanstd(df[column].values)
-#             else:
-#                 mean = np.nanmean(df.loc[df['Subtype'] == ref, column].values)
-#                 mean_dict[column] = mean
-#                 stdev = np.nanstd(df.loc[df['Subtype'] == ref, column].values)
-#                 stdev_dict[column] = stdev
-
-#     # Standardize the features in the dataframe
-#     for column in df.columns:
-#         if column != 'Subtype' and column in stdev_dict:
-#             df[column] -= mean_dict[column]
-#             df[column] /= stdev_dict[column]
-
-#     return df, mean_dict, stdev_dict
+def transform_to_basis(vector, basis):
+    """
+    Project a vector onto a new basis and calculate the difference between the original vector and its projection.
+    """
+    # Project the original vector onto the new basis
+    projected_vector = np.dot(vector, basis.T)
+    # Project the transformed vector back into the original space
+    back_projected_vector = np.dot(projected_vector, basis)
+    # Calculate the difference between the original vector and its projection
+    difference_vector = vector - back_projected_vector
+    return projected_vector, difference_vector
 
 
 def minmax_standardize(df: pd.DataFrame, min_dict: dict = None, range_dict: dict = None) -> tuple:
     """
-
+    Standardize the features in a dataframe by min/max scaling.
     """
     # If no min/range dictionaries are supplied, calculate them
     print('Standardizing features by min/max . . .')
@@ -104,8 +108,8 @@ def minmax_standardize(df: pd.DataFrame, min_dict: dict = None, range_dict: dict
     # Standardize the features in the dataframe
     for column in df.columns:
         if column != 'Subtype' and column in min_dict:
-            df[column] -= min_dict[column]
-            df[column] /= range_dict[column]
+            df.loc[:, column] -= min_dict[column]
+            df.loc[:, column] /= range_dict[column]
 
     return df, min_dict, range_dict
 
@@ -143,10 +147,8 @@ def maximal_simplex_volume(df: pd.DataFrame) -> pd.DataFrame:
         else:
             # Calculate the base of the simplex (the volume of the (n-1)-dimensional simplex formed by the first n-1 vectors)
             base = simplex_volume_recursive(vectors[:-1])
-
             # Calculate the height of the simplex (the distance from the nth vector to the (n-1)-dimensional simplex formed by the first n-1 vectors)
             height = np.linalg.norm(vectors[-1] - vectors[0])
-
             # Calculate the volume of the simplex
             volume = base * height / n
             return volume
@@ -161,20 +163,41 @@ def maximal_simplex_volume(df: pd.DataFrame) -> pd.DataFrame:
             volume (float): The volume of the simplex formed by the vectors.
         """
         # Apply the feature mask to the vectors
-        n_mask = sum(feature_mask)
         masked_mats = [mat[:, feature_mask.astype(bool)] for mat in class_mats]
         masked_vectors = [np.mean(masked_mat, axis=0) for masked_mat in masked_mats]
         masked_cov_mats = [np.cov(masked_mat, rowvar=False) for masked_mat in masked_mats]
         psd_stati = [is_positive_semi_definite(masked_cov_mat) for masked_cov_mat in masked_cov_mats]
         if not all(psd_stati):
-            return 0
-        masked_dets = [np.linalg.det(cov_matrix) for cov_matrix in masked_cov_mats]
-        masked_nstdevs = [det**(1 / n_mask) if det >= 0 else 1000 for det in masked_dets]
-        scale_factor = np.mean(masked_nstdevs)
+            return 10e-10
+        # n_mask = sum(feature_mask)
+        # masked_dets = [np.linalg.det(cov_matrix) for cov_matrix in masked_cov_mats]
+        # masked_nstdevs = [det**(1 / n_mask) if det >= 0 else 1000 for det in masked_dets]  # 1000 is an arbitrary large value
+        # scale_factor = np.sum(masked_nstdevs)
+
+        # Calculate the edges of the simplex
+        edges = [v - masked_vectors[i] for i, v in enumerate(masked_vectors) for _ in range(i)]
+        # Project the data onto the edges and calculate the variance of the projected data
+        edge_variances = []
+        for edge in edges:
+            projections = [np.dot(masked_mat - np.mean(masked_mat, axis=0), edge) for masked_mat in masked_mats]
+            variances = [np.var(projection) for projection in projections]
+            edge_variances.append(np.mean(variances))
+        # Calculate the "volume" of the standard deviations at each vertex
+        vertex_stdev_volumes = []
+        for i in range(len(masked_vectors)):
+            vertex_edge_variances = edge_variances[i*(len(masked_vectors)-1):(i+1)*(len(masked_vectors)-1)]
+            vertex_stdev_volumes.append(np.prod(vertex_edge_variances))
+        # Calculate the total edge-related standard deviation volume
+        scale_factor = np.sum(vertex_stdev_volumes)
+
         # Calculate the volume of the simplex, weighted by features used (minimize feature space)
         volume = simplex_volume_recursive(masked_vectors) / scale_factor
-        return volume
-    
+        # Calculate the pairwise distances between the mean vectors
+        pairwise_distances = pdist(masked_vectors)
+        # Penalize the volume by the irregularity of the simplex (no penalty for a regular simplex)
+        penalty = np.max(pairwise_distances) / np.min(pairwise_distances)
+        return volume / penalty
+
     def greedy_maximize(fun, n, n_min):
         """
         Greedy algorithm to maximize a function.
@@ -213,7 +236,6 @@ def maximal_simplex_volume(df: pd.DataFrame) -> pd.DataFrame:
             # Initialize the best new mask and best new value
             best_new_mask = best_mask
             best_new_value = best_value
-
             # Iterate over all bits in the mask
             for i in range(n):
                 if not best_mask[i]:
@@ -221,7 +243,6 @@ def maximal_simplex_volume(df: pd.DataFrame) -> pd.DataFrame:
                     new_mask = best_mask.copy()
                     new_mask[i] = 1
                     new_value = fun(new_mask)
-
                     # Update the best new mask and best new value
                     if new_value > best_new_value:
                         best_new_mask = new_mask
@@ -230,7 +251,6 @@ def maximal_simplex_volume(df: pd.DataFrame) -> pd.DataFrame:
             # If no single bit can increase the function value, stop the algorithm
             if best_new_value == best_value:
                 break
-
             # Otherwise, update the best mask and best value
             best_mask = best_new_mask
             best_value = best_new_value
@@ -241,10 +261,9 @@ def maximal_simplex_volume(df: pd.DataFrame) -> pd.DataFrame:
                     for subtype, mc_df in zip(subtypes, class_mats):
                         print(subtype + ': Mean = ' + str(np.mean(mc_df[:, feature_index])) + ', Std Dev = ' + str(np.std(mc_df[:, feature_index])))
                     printed_features.add(feature)
-
         return best_mask
 
-    result = greedy_maximize(lambda x: objective(x), n_features, n_classes-1)
+    result = greedy_maximize(lambda x: objective(x), n_features, n_classes - 1)
     print('\nMaximal simplex volume feature subset complete.')
     print('Final (weighted) simplex volume: ' + str(objective(result)))
     print('Final number of features: ' + str(sum(result)))
@@ -355,32 +374,4 @@ def nroc_curve(y_true: np.array, predicted: np.array, num_thresh: int = 1000) ->
         tprs.append(tp / (tp + fn))
 
     return fprs, tprs, thresholds
-
-
-# def _get_intersect(points_a, points_b):
-#     """
-#         Returns the point of intersection of the line passing through points_a and the line passing through points_b
-#         (2D) or the line passing through points_a and the plane defined by points_b (3D).
-#             Parameters:
-#                 points_a [a1, a2]: points defining line a
-#                 points_b [b1, b2, (b3)]: points defining line (plane) b
-#             Returns:
-#                 out_point [x, y, . . .]: the point of intersection in base coordinates
-#     """
-#     if len(points_b) == 2:
-#         s = np.vstack([points_a[0], points_a[1], points_b[0], points_b[1]])
-#         h = np.hstack((s, np.ones((4, 1))))
-#         l1 = np.cross(h[0], h[1])
-#         l2 = np.cross(h[2], h[3])
-#         x, y, z = np.cross(l1, l2)
-#         if z == 0:  # lines are parallel - SHOULD be impossible given constraints to call this function
-#             return float('inf'), float('inf')
-#         return np.array([x/z, y/z])
-#     else:
-#         # below is untested
-#         norm = np.cross(points_b[2] - points_b[0], points_b[1] - points_b[0])
-#         w = points_a[0] - points_b[0]
-#         si = -norm.dot(w) / norm.dot(points_a[1] - points_a[0])
-#         psi = w + si * (points_a[1] - points_a[0]) + points_a[0]
-#         return psi
 

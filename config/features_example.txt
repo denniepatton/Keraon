@@ -1,1 +1,4 @@
-central-depth
+AR_central-depth
+ASCL1_central-depth
+ATAC-AD-Sig_fragment-mean
+ATAC-NE-Sig_fragment-mean

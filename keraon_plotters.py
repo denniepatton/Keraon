@@ -5,7 +5,6 @@
 """
 This module contains plotting functions for final predictions from Keraon.
 """
-# TODO: impliment a way to pass the subtype of interest to plot_ctdpheno, plot_roc (as opposed to NEPC)
 
 import numpy as np
 import pandas as pd
@@ -17,7 +16,6 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from matplotlib.colors import LinearSegmentedColormap
 import warnings # ignore warnings, e.g. matplotlib deprecation warnings
-
 
 def plot_pca(df: pd.DataFrame, direct: str, palette: dict, name: str, post_df=None) -> None:
     """
@@ -88,7 +86,7 @@ def plot_pca(df: pd.DataFrame, direct: str, palette: dict, name: str, post_df=No
     return
 
 
-def plot_ctdpheno(predictions: pd.DataFrame, direct: str, key: str,  threshold: float, label='sample') -> None:
+def plot_ctdpheno(predictions: pd.DataFrame, direct: str, key: str,  threshold: float, label='sample', plot_range=[0, 1]) -> None:
     """
     Plot stick and ball plot of prediction (relative log liklihood) for each subtype: key, based on truth labels. 
 
@@ -99,16 +97,19 @@ def plot_ctdpheno(predictions: pd.DataFrame, direct: str, key: str,  threshold: 
        key (str): The name of the subtype/label to base thresholding on.
        threshold (float): The threshold to use for binary classification.
        label (str): The label for the plot. Default is 'sample'.
+       plot_range (list): The range of values to plot. Default is [0, 1].
     """
     if label == key:
         acc = (predictions[key] >= threshold).mean() * 100
     else:
         acc = (predictions[key] < threshold).mean() * 100
-    predictions.loc[:, key] = predictions[key] - threshold
+    predictions.loc[:, key] = predictions[key]
     
     # Create a diverging color map that is centered at zero
     cmap = sns.color_palette("vlag", as_cmap=True)
-    norm = TwoSlopeNorm(vmin=-threshold, vcenter=0, vmax=(1-threshold))
+    norm = TwoSlopeNorm(vmin= 0 if plot_range[0] >= threshold else plot_range[0],
+                        vcenter=threshold,
+                        vmax= 1 if plot_range[1] <= threshold else plot_range[1])
     # Convert the colormap to a list of colors
     normalized_data = norm(predictions[key])
     colors = cmap(normalized_data)
@@ -120,7 +121,7 @@ def plot_ctdpheno(predictions: pd.DataFrame, direct: str, key: str,  threshold: 
     plt.figure(figsize=(int(len(predictions)/2), 3))
     g = sns.barplot(x=predictions.index, y=key, hue=key, data=predictions, palette=color_dict, dodge=False)
     g.legend_.remove()
-    g.set_ylim(-threshold, 1-threshold)
+    g.set_ylim(plot_range)
     sns.scatterplot(x=predictions.index, y=key, hue=key, data=predictions, palette=color_dict, s=600, legend=False)
 
     def change_width(ax, new_value):
@@ -135,7 +136,7 @@ def plot_ctdpheno(predictions: pd.DataFrame, direct: str, key: str,  threshold: 
     change_width(g, .2)
     for item in g.get_xticklabels():
         item.set_rotation(90)
-    plt.axhline(y=0, color='b', linestyle='--', lw=2)
+    plt.axhline(y=threshold, color='black', linestyle='--', lw=2)
     plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
     plt.ylabel('relative log likelihood')
     plt.title(label + ' (' + str(round(acc, 2)) + '% accuracy)')
@@ -158,10 +159,7 @@ def plot_keraon(predictions: pd.DataFrame, direct: str, key: str,  threshold: fl
         acc = (predictions[key] >= threshold).mean() * 100
     else:
         acc = (predictions[key] < threshold).mean() * 100
-    palette = {k + '_fraction': v for k, v in palette.items()}
-    # Change the color for "Healthy_fraction" to light gray
-    palette["Healthy_fraction"] = "#D3D3D3"
-    # predictions = predictions.sort_values(by=['Healthy_fraction', key], ascending=[True, False])
+    predictions = predictions.sort_values(by=['Healthy_fraction', key], ascending=[True, False])
     plt.figure()
     predictions = predictions.filter(like='_fraction')
     # Rearrange columns
@@ -173,6 +171,9 @@ def plot_keraon(predictions: pd.DataFrame, direct: str, key: str,  threshold: fl
     if label == 'Unknown':  # sort by tumor fraction: grouping
         predictions = predictions.sort_index()
     if palette is not None:
+        palette = {k + '_fraction': v for k, v in palette.items()}
+        # Change the color for "Healthy_fraction" to light gray
+        palette["Healthy_fraction"] = "#D3D3D3"
         predictions.plot(kind='bar', stacked=True, color=palette, width=0.90, legend=False, figsize=(int(len(predictions)/2), 3))
     else:
         predictions.plot(kind='bar', stacked=True, width=0.90, legend=False, figsize=(int(len(predictions)/2), 3))
@@ -184,36 +185,6 @@ def plot_keraon(predictions: pd.DataFrame, direct: str, key: str,  threshold: fl
     plt.savefig(direct + label + '_predictions.pdf', bbox_inches="tight")
     plt.close()
 
-    # Previous code for dividing up the space:
-        # if len(df['Subtype'].unique()) == 2:
-    #     known_subtypes = ['ARPC', 'NEPC']
-    # elif len(df['Subtype'].unique()) == 3:
-    #     known_subtypes = ['ARPC', 'NEPC', 'MIX']
-    # else:
-    #     known_subtypes = ['ARPC', 'NEPC', 'MIX', 'ARPC_crpc']
-    # widths = [df.loc[df['Subtype'] == sub].shape[0] / df.loc[df['Subtype'] == known_subtypes[-1]].shape[0] for sub
-    #                 in known_subtypes]
-    # fig, axes = plt.subplots(nrows=1, ncols=len(known_subtypes), sharey=True, gridspec_kw={'width_ratios': widths},
-    #                          figsize=(16, 2))
-    # for i, subtype in enumerate(known_subtypes):
-    #     df_sub = df.loc[df['Subtype'] == subtype]
-    #     if subtype == 'ARPC' or subtype == 'ARPC_crpc':
-    #         acc = round(df_sub.loc[df_sub['NEPC_fraction'] < df_sub['thresh']].shape[0] / df_sub.shape[0], 4)
-    #         subtitle = 'ARPC (' + str(100 * acc) + '%)'
-    #     elif subtype == 'NEPC':
-    #         acc = round(df_sub.loc[df_sub['NEPC_fraction'] >= df_sub['thresh']].shape[0] / df_sub.shape[0], 4)
-    #         subtitle = 'NEPC (' + str(100 * acc) + '%)'
-    #     else:
-    #         subtitle = 'MIXED'
-    #     df_sub = df_sub[['NEPC_fraction', 'ARPC_fraction', 'Healthy_fraction']]
-    #     df_sub.plot(ax=axes[i], kind='bar', stacked=True, color=palette_stacked, width=0.90, legend=False)
-    #     axes[i].set_title(subtitle)
-    #     if i == 0:
-    #         axes[i].set_ylabel('total fraction')
-    #     elif i == len(known_subtypes) - 1:
-    #         axes[i].legend(loc='upper left', bbox_to_anchor=(1.02, 1), borderaxespad=0)
-    #     if plot_thresh:
-    #         axes[i].axhline(y=thresh, color='black', linestyle='dashed')
     return
 
 
