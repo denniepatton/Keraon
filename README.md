@@ -109,102 +109,79 @@ This script contains functions to perform feature selection, statistical analysi
 
 This script contains plotting functions designed to visualize the final predictions from Keraon. These include generating PCA plots, creating stick and ball plots of subtype predictions from ctdPheno, plotting stacked bar plots to display the fraction and burden of each subtype in a sample for fraction estimation, and constructing ROC curves to evaluate the performance of binary classifiers.
 
-## Methodology
+### Methodology
 
-### Simplex Volume Maximization (feature selection)
+#### Simplex Volume Maximization (Feature Selection)
 
-Simplex volume maximization aims to identify a subset of features within a high-dimensional dataset that maximizes the volume of the simplex formed by the mean vectors of different classes while minimizing the number of features used and the spread at each vertex.
-This approach therefore identifies features which are highly differentiating for the given classes in a higher-dimensional space, regardless of whether or not those features provide strong seperation individually. This process is also synergistic with fractional phenotypes estimation performed by Keraon, which uses the simplex to infer class componenets.
+Simplex volume maximization aims to identify a subset of features within a high-dimensional dataset that maximizes the volume of the simplex formed by the mean vectors of different classes while minimizing the number of features used and the spread at each vertex. This approach identifies features that are highly differentiating for the given classes in a higher-dimensional space, regardless of whether or not those features provide strong separation individually. This process is synergistic with fractional phenotypes estimation performed by Keraon, which uses the simplex to infer class components.
 
-
-As a precursor to the process, if more than 10 features are passed they will be screened for normalcy within each class using the Shapiro-Wilk test. See keraon_helpers.py norm_exp() for specifics. All features, regardless of whether simplex volume maximization is performed, are min-max standardized before any downstream processes.
+As a precursor to the process, if more than 10 features are passed, they will be screened for normalcy within each class using the Shapiro-Wilk test. See `keraon_helpers.py norm_exp()` for specifics. All features, regardless of whether simplex volume maximization is performed, are min-max standardized before any downstream processes.
 
 #### Simplex Volume Calculation
 
 Given \( n \) classes (or subtypes), each represented by a mean vector in a high-dimensional feature space, the volume \( V \) of the simplex formed by these vectors can be calculated recursively using the heights and bases of lower-dimensional simplexes.
 
-For a set of \( n+1 \) vectors \(\mathbf{v}_0, \mathbf{v}_1, \ldots, \mathbf{v}_n \), the volume \( V \) of the simplex can be calculated as:
+For a set of \( n+1 \) vectors (\( \mathbf{v}_0, \mathbf{v}_1, \ldots, \mathbf{v}_n \)), the volume \( V \) of the simplex can be calculated as:
 
-\[
-V = \frac{1}{n} \times \text{Base} \times \text{Height}
-\]
+\[ V = \frac{1}{n} \times \text{Base} \times \text{Height} \]
 
 where:
-- The **Base** is the volume of the \((n-1)\)-dimensional simplex formed by the first \( n \) vectors.
-- The **Height** is the perpendicular distance from the \( n \)-th vector to the base simplex.
+- The Base is the volume of the \((n-1)\)-dimensional simplex formed by the first \( n \) vectors.
+- The Height is the perpendicular distance from the \( n \)-th vector to the base simplex.
 
 Mathematically, if \( V_{n-1} \) is the volume of the \((n-1)\)-dimensional simplex, and \( \mathbf{v}_0, \mathbf{v}_1, \ldots, \mathbf{v}_{n-1} \) are the vectors forming the base simplex, then the height \( H \) is given by:
 
-\[
-H = \frac{\|\mathbf{v}_n - \mathbf{v}_0\|}{n}
-\]
+\[ H = \frac{|\mathbf{v}_n - \mathbf{v}_0|}{n} \]
 
 Thus, the volume \( V \) of the \( n \)-dimensional simplex is:
 
-\[
-V = \frac{1}{n} \times V_{n-1} \times \frac{\|\mathbf{v}_n - \mathbf{v}_0\|}{n}
-\]
+\[ V = \frac{1}{n} \times V_{n-1} \times \frac{|\mathbf{v}_n - \mathbf{v}_0|}{n} \]
 
 #### Objective Function
 
 The objective function to be maximized is the volume of the simplex formed by the mean vectors of the classes, weighted by a penalty factor to account for irregularity and a scaling factor to ensure positive semi-definiteness of covariance matrices. The objective function can be expressed as:
 
-\[
-\text{Objective} = \frac{V}{\text{Penalty} \times \text{Scale Factor}}
-\]
+\[ \text{Objective} = \frac{V}{\text{Penalty} \times \text{Scale Factor}} \]
 
 #### Penalty Calculation
 
-The penalty is introduced to penalize irregular simplices (i.e., those that are not equilateral). It is calculated as the ratio of the maximum to the minimum pairwise distance between the mean vectors. Given the mean vectors \(\mathbf{v}_i\) and \(\mathbf{v}_j\):
+The penalty is introduced to penalize irregular simplices (i.e., those that are not equilateral). It is calculated as the ratio of the maximum to the minimum pairwise distance between the mean vectors. Given the mean vectors \( \mathbf{v}_i \) and \( \mathbf{v}_j \):
 
-\[
-\text{Penalty} = \frac{\max(\|\mathbf{v}_i - \mathbf{v}_j\|)}{\min(\|\mathbf{v}_i - \mathbf{v}_j\|)}
-\]
+\[ \text{Penalty} = \frac{\max(|\mathbf{v}_i - \mathbf{v}_j|)}{\min(|\mathbf{v}_i - \mathbf{v}_j|)} \]
 
-where \(\|\mathbf{v}_i - \mathbf{v}_j\|\) denotes the Euclidean distance between pairs of mean vectors.
+where \( |\mathbf{v}_i - \mathbf{v}_j| \) denotes the Euclidean distance between pairs of mean vectors.
 
 #### Scale Factor Calculation
 
-The scale factor is used to ensure that the covariance matrices of the selected features are positive semi-definite and to down-weight
-simplices which have large variances along edges. It is calculated based on the standard deviations of the projected data onto the edges of the simplex. For each edge \( \mathbf{e}_i \) formed by the mean vectors, the variance of the projected data is computed. The scale factor is the sum of the products of these variances:
+The scale factor is used to ensure that the covariance matrices of the selected features are positive semi-definite and to down-weight simplices that have large variances along edges. It is calculated based on the standard deviations of the projected data onto the edges of the simplex. For each edge \( \mathbf{e}_{ij} \) formed by the mean vectors, the variance of the projected data is computed. The scale factor is the sum of the products of these variances:
 
-1. **Edge Calculation**: For each pair of mean vectors \(\mathbf{v}_i\) and \(\mathbf{v}_j\), compute the edge:
+1. **Edge Calculation:** For each pair of mean vectors \( \mathbf{v}_i \) and \( \mathbf{v}_j \), compute the edge:
 
-\[
-\mathbf{e}_{ij} = \mathbf{v}_i - \mathbf{v}_j
-\]
+\[ \mathbf{e}_{ij} = \mathbf{v}_i - \mathbf{v}_j \]
 
-2. **Projection and Variance Calculation**: Project the data onto each edge and compute the variance. For a given edge \(\mathbf{e}_{ij}\), the projection of the data matrix \(\mathbf{X}\) is:
+2. **Projection and Variance Calculation:** Project the data onto each edge and compute the variance. For a given edge \( \mathbf{e}_{ij} \), the projection of the data matrix \( \mathbf{X} \) is:
 
-\[
-\text{Proj}(\mathbf{X}, \mathbf{e}_{ij}) = \mathbf{X} \cdot \mathbf{e}_{ij}
-\]
+\[ \text{Proj}(\mathbf{X}, \mathbf{e}_{ij}) = \mathbf{X} \cdot \mathbf{e}_{ij} \]
 
 The variance of the projections is:
 
-\[
-\text{Var}(\text{Proj}(\mathbf{X}, \mathbf{e}_{ij}))
-\]
+\[ \text{Var}(\text{Proj}(\mathbf{X}, \mathbf{e}_{ij})) \]
 
-3. **Vertex Standard Deviation Volumes**: Calculate the "volume" of the standard deviations at each vertex. For each vertex \(\mathbf{v}_i\), the product of the variances of the edges connected to it is computed:
+3. **Vertex Standard Deviation Volumes:** Calculate the "volume" of the standard deviations at each vertex. For each vertex \( \mathbf{v}_i \), the product of the variances of the edges connected to it is computed:
 
-\[
-\text{Vertex StDev Volume}_i = \prod_{\mathbf{e}_{ij}} \text{Var}(\text{Proj}(\mathbf{X}, \mathbf{e}_{ij}))
-\]
+\[ \text{Vertex StDev Volume}_i = \prod_{\mathbf{e}_{ij}} \text{Var}(\text{Proj}(\mathbf{X}, \mathbf{e}_{ij})) \]
 
-4. **Scale Factor**: The total scale factor is the sum of the vertex standard deviation volumes:
+4. **Scale Factor:** The total scale factor is the sum of the vertex standard deviation volumes:
 
-\[
-\text{Scale Factor} = \sum_{i} \text{Vertex StDev Volume}_i
-\]
+\[ \text{Scale Factor} = \sum_{i} \text{Vertex StDev Volume}_i \]
 
 #### Greedy Maximization Algorithm
 
 The greedy maximization algorithm is used to iteratively select features that maximize the objective function. Starting with an empty set of features, the algorithm evaluates all possible feature combinations, selects the base combination that maximizes the objective function, and iteratively adds features until no further improvements can be made.
 
-1. **Initialization**: Start with an empty feature mask and initialize the best value to negative infinity.
-2. **Combinatorial Search**: Evaluate all possible masks with a minimal number of features set to 1. This is done to establish an initial subset of features.
-3. **Greedy Search**: Iteratively add features that maximize the objective function until no further improvements can be made.
+1. **Initialization:** Start with an empty feature mask and initialize the best value to negative infinity.
+2. **Combinatorial Search:** Evaluate all possible masks with a minimal number of features set to 1. This is done to establish an initial subset of features.
+3. **Greedy Search:** Iteratively add features that maximize the objective function until no further improvements can be made.
 
 The final result is a subset of features that maximizes the simplex volume while maintaining a balance between feature space complexity and discriminative power.
 
@@ -216,9 +193,7 @@ The `ctdpheno` function calculates TFX-shifted multivariate group identity relat
 
 The log likelihood of the observed feature values given the TFX and the mean and covariance matrices of the subtypes is calculated using the multivariate normal probability density function (pdf). For a sample \( \mathbf{x} \), the multivariate normal pdf is given by:
 
-\[
-\mathcal{L}(\mathbf{x} \mid \mu, \Sigma) = \frac{1}{(2\pi)^{k/2} |\Sigma|^{1/2}} \exp\left(-\frac{1}{2} (\mathbf{x} - \mu)^T \Sigma^{-1} (\mathbf{x} - \mu)\right)
-\]
+\[ \mathcal{L}(\mathbf{x} \mid \mu, \Sigma) = \frac{1}{(2\pi)^{k/2} |\Sigma|^{1/2}} \exp\left(-\frac{1}{2} (\mathbf{x} - \mu)^T \Sigma^{-1} (\mathbf{x} - \mu)\right) \]
 
 where:
 - \( \mu \) is the mean vector.
@@ -227,55 +202,43 @@ where:
 
 The log of the likelihood (log likelihood) is:
 
-\[
-\log \mathcal{L}(\mathbf{x} \mid \mu, \Sigma) = -\frac{1}{2} \left[ (\mathbf{x} - \mu)^T \Sigma^{-1} (\mathbf{x} - \mu) + \log |\Sigma| + k \log (2\pi) \right]
-\]
+\[ \log \mathcal{L}(\mathbf{x} \mid \mu, \Sigma) = -\frac{1}{2} \left[ (\mathbf{x} - \mu)^T \Sigma^{-1} (\mathbf{x} - \mu) + \log |\Sigma| + k \log (2\pi) \right] \]
 
 #### Mixture Model
 
 For a given sample \( \mathbf{x} \) with tumor fraction TFX, the mean vector of the class mixtures \( \mu_{\text{mixture}} \) are calculated as:
 
-\[
-\mu_{\text{mixture}} = \text{TFX} \cdot \mu_{\text{subtype}} + (1 - \text{TFX}) \cdot \mu_{\text{healthy}}
-\]
+\[ \mu_{\text{mixture}} = \text{TFX} \cdot \mu_{\text{subtype}} + (1 - \text{TFX}) \cdot \mu_{\text{healthy}} \]
 
 The covariance matrix of the mixture \( \Sigma_{\text{mixture}} \) is simplified as an identity matrix by default:
 
-\[
-\Sigma_{\text{mixture}} = I
-\]
+\[ \Sigma_{\text{mixture}} = I \]
 
 This is done to account for large disparities in sample size between anchor classes. The log likelihood for each subtype \( i \) is:
 
-\[
-\log \mathcal{L}_i = -\frac{1}{2} \left[ (\mathbf{x} - \mu_{\text{mixture}, i})^T I^{-1} (\mathbf{x} - \mu_{\text{mixture}, i}) + \log |I| + k \log (2\pi) \right]
-\]
+\[ \log \mathcal{L}_i = -\frac{1}{2} \left[ (\mathbf{x} - \mu_{\text{mixture}, i})^T I^{-1} (\mathbf{x} - \mu_{\text{mixture}, i}) + \log |I| + k \log (2\pi) \right] \]
 
-Since \(\Sigma_{\text{mixture}} = I\) and \(\log |I| = 0\), this simplifies to:
+Since \( \Sigma_{\text{mixture}} = I \) and \( \log |I| = 0 \), this simplifies to:
 
-\[
-\log \mathcal{L}_i = -\frac{1}{2} \left[ (\mathbf{x} - \mu_{\text{mixture}, i})^T (\mathbf{x} - \mu_{\text{mixture}, i}) + k \log (2\pi) \right]
-\]
+\[ \log \mathcal{L}_i = -\frac{1}{2} \left[ (\mathbf{x} - \mu_{\
+
+text{mixture}, i})^T (\mathbf{x} - \mu_{\text{mixture}, i}) + k \log (2\pi) \right] \]
 
 #### Optimizing TFX
 
 If the initial log likelihoods are not real, the function automatically optimizes the TFX to maximize the total log likelihood. This is achieved by directly searching over a range of TFX values and selecting the one that maximizes the likelihood:
 
-\[
-\text{TFX}_{\text{optimal}} = \arg \max_{\text{TFX}} \sum_{i=1}^{n} \log \mathcal{L}(\mathbf{x}_i \mid \mu_{\text{mixture}}, \Sigma_{\text{mixture}})
-\]
+\[ \text{TFX}_{\text{optimal}} = \arg \max_{\text{TFX}} \sum_{i=1}^{n} \log \mathcal{L}(\mathbf{x}_i \mid \mu_{\text{mixture}}, \Sigma_{\text{mixture}}) \]
 
 #### Weights and Predictions
 
 The function calculates the weights/scores for each subtype using the softmax function applied to the log likelihoods:
 
-\[
-w_i = \frac{e^{\log \mathcal{L}_i}}{\sum_{j} e^{\log \mathcal{L}_j}}
-\]
+\[ w_i = \frac{e^{\log \mathcal{L}_i}}{\sum_{j} e^{\log \mathcal{L}_j}} \]
 
 where \( w_i \) is the weight for subtype \( i \).
 
-Barring validation in an additional dataset using an identical reference set of anchors in order to determine an optimal scoring threshold, the prediction for each sample is the subtype with the highest weight.
+Barring validation in an additional dataset using an identical reference set of anchors to determine an optimal scoring threshold, the prediction for each sample is the subtype with the highest weight.
 
 ### Mixture Estimation ("Keraon")
 
@@ -283,93 +246,67 @@ The `keraon` function transforms the feature space of a dataset into a new basis
 
 #### Basis Vector Calculation
 
-1. **Mean Vectors**: For each subtype \( i \), the mean vector \( \mu_i \) is calculated from the reference data:
+1. **Mean Vectors:** For each subtype \( i \), the mean vector \( \mu_i \) is calculated from the reference data:
 
-\[
-\mu_i = \frac{1}{n_i} \sum_{j=1}^{n_i} \mathbf{x}_j^{(i)}
-\]
+\[ \mu_i = \frac{1}{n_i} \sum_{j=1}^{n_i} \mathbf{x}_j^{(i)} \]
 
 where \( n_i \) is the number of samples in subtype \( i \), and \( \mathbf{x}_j^{(i)} \) is the \( j \)-th sample of subtype \( i \).
 
-2. **Directional Vectors**: Subtract the mean vector of the 'Healthy' subtype \( \mu_{\text{Healthy}} \) from the mean vectors of the other subtypes to get directional vectors from healthy to each subtype:
+2. **Directional Vectors:** Subtract the mean vector of the 'Healthy' subtype \( \mu_{\text{Healthy}} \) from the mean vectors of the other subtypes to get directional vectors from healthy to each subtype:
 
-\[
-\mathbf{v}_i = \mu_i - \mu_{\text{Healthy}}
-\]
+\[ \mathbf{v}_i = \mu_i - \mu_{\text{Healthy}} \]
 
-3. **Orthogonal Basis Vectors**: Apply the Gram-Schmidt process to the directional vectors \( \mathbf{v}_i \) to obtain an orthogonal basis, with healthy at the origin and each axis defining a direction along a subtype:
+3. **Orthogonal Basis Vectors:** Apply the Gram-Schmidt process to the directional vectors \( \mathbf{v}_i \) to obtain an orthogonal basis, with healthy at the origin and each axis defining a direction along a subtype:
 
-\[
-\mathbf{u}_i = \frac{\mathbf{v}_i - \sum_{j=1}^{i-1} \left( \frac{\mathbf{v}_i \cdot \mathbf{u}_j}{\mathbf{u}_j \cdot \mathbf{u}_j} \right) \mathbf{u}_j}{\left\| \mathbf{v}_i - \sum_{j=1}^{i-1} \left( \frac{\mathbf{v}_i \cdot \mathbf{u}_j}{\mathbf{u}_j \cdot \mathbf{u}_j} \right) \mathbf{u}_j \right\|}
-\]
+\[ \mathbf{u}_i = \frac{\mathbf{v}_i - \sum_{j=1}^{i-1} \left( \frac{\mathbf{v}_i \cdot \mathbf{u}_j}{\mathbf{u}_j \cdot \mathbf{u}_j} \right) \mathbf{u}_j}{\left| \mathbf{v}_i - \sum_{j=1}^{i-1} \left( \frac{\mathbf{v}_i \cdot \mathbf{u}_j}{\mathbf{u}_j \cdot \mathbf{u}_j} \right) \mathbf{u}_j \right|} \]
 
 #### Sample Transformation
 
-1. **Transform to New Basis**: For each sample vector \( \mathbf{x} \), transform the vector to the new basis by subtracting \( \mu_{\text{Healthy}} \) and projecting onto the orthogonal basis:
+1. **Transform to New Basis:** For each sample vector \( \mathbf{x} \), transform the vector to the new basis by subtracting \( \mu_{\text{Healthy}} \) and projecting onto the orthogonal basis:
 
-\[
-\mathbf{y} = \mathbf{x} - \mu_{\text{Healthy}}
-\]
+\[ \mathbf{y} = \mathbf{x} - \mu_{\text{Healthy}} \]
 
-\[
-\mathbf{p} = \mathbf{y} \cdot \mathbf{U}^T
-\]
+\[ \mathbf{p} = \mathbf{y} \cdot \mathbf{U}^T \]
 
 where \( \mathbf{U} \) is the matrix of orthogonal basis vectors.
 
-2. **Regions of the Feature Space**: Determine the region of the feature space based on the transformed sample vector \( \mathbf{p} \):
+2. **Regions of the Feature Space:** Determine the region of the feature space based on the transformed sample vector \( \mathbf{p} \):
 
-- **Simplex**: All components of \( \mathbf{p} \) are positive.
-- **Contra-Simplex**: All components of \( \mathbf{p} \) are negative.
-- **Outer-Simplex**: Mixed positive and negative components.
+    - **Simplex:** All components of \( \mathbf{p} \) are positive.
+    - **Contra-Simplex:** All components of \( \mathbf{p} \) are negative.
+    - **Outer-Simplex:** Mixed positive and negative components.
 
-3. **Adjust for Contra/Outer-Simplex**: If the sample vector is in the contra-simplex region, negate the vector and scale it to match the TFX (this method is not well validated, so please watch out for samples falling in the contra-simplex space):
+3. **Adjust for Contra/Outer-Simplex:** If the sample vector is in the contra-simplex region, negate the vector and scale it to match the TFX (this method is not well validated, so please watch out for samples falling in the contra-simplex space):
 
-\[
-\mathbf{p} = -\mathbf{p}
-\]
+\[ \mathbf{p} = -\mathbf{p} \]
 
-\[
-\mathbf{p} = \left( \frac{\mathbf{p}}{\|\mathbf{p}\|} \right) \cdot \text{TFX}
-\]
+\[ \mathbf{p} = \left( \frac{\mathbf{p}}{|\mathbf{p}|} \right) \cdot \text{TFX} \]
 
 If the sample vector has some, but not all, negative components, those are zeroed out on the assumption that they do not imply any fraction of that subtype.
 
 #### Fraction and Burden Calculation
 
-1. **Projected and Orthogonal Lengths**: Calculate the projected length \( \|\mathbf{p}\| \) of the vector which lies in the feature space defined by the simplex, and the orthogonal length \( \|\mathbf{d}\| \) of the vector which completes the sample vector along an axis orthogonal to the feature space:
+1. **Projected and Orthogonal Lengths:** Calculate the projected length \( |\mathbf{p}| \) of the vector that lies in the feature space defined by the simplex, and the orthogonal length \( |\mathbf{d}| \) of the vector that completes the sample vector along an axis orthogonal to the feature space:
 
-\[
-\|\mathbf{p}\| = \sqrt{\sum_{i=1}^{k} p_i^2}
-\]
+\[ |\mathbf{p}| = \sqrt{\sum_{i=1}^{k} p_i^2} \]
 
-\[
-\|\mathbf{d}\| = \sqrt{\sum_{i=1}^{k} d_i^2}
-\]
+\[ |\mathbf{d}| = \sqrt{\sum_{i=1}^{k} d_i^2} \]
 
 where \( \mathbf{d} \) is the difference vector between the original vector and its projection.
 
-2. **Component Fractions**: Normalize the projected and orthogonal components to get the fraction of each subtype and off-target fraction:
+2. **Component Fractions:** Normalize the projected and orthogonal components to get the fraction of each subtype and off-target fraction:
 
-\[
-\text{comp\_fraction}_i = \frac{p_i}{\|\mathbf{p}\|} \quad \text{for each } i
-\]
+\[ \text{comp\_fraction}_i = \frac{p_i}{|\mathbf{p}|} \quad \text{for each } i \]
 
-\[
-\text{off\_target\_fraction} = \frac{\|\mathbf{d}\|}{\|\mathbf{p}\| + \|\mathbf{d}\|}
-\]
+\[ \text{off\_target\_fraction} = \frac{|\mathbf{d}|}{|\mathbf{p}| + |\mathbf{d}|} \]
 
-3. **Subtype Burdens**: Calculate the burden of each subtype as the product of TFX and the fraction of the subtype:
+3. **Subtype Burdens:** Calculate the burden of each subtype as the product of TFX and the fraction of the subtype:
 
-\[
-\text{burden}_i = \text{TFX} \cdot \text{comp\_fraction}_i
-\]
+\[ \text{burden}_i = \text{TFX} \cdot \text{comp\_fraction}_i \]
 
-4. **Normalize Fractions**: Ensure the sum of fractions is 1:
+4. **Normalize Fractions:** Ensure the sum of fractions is 1:
 
-\[
-\text{comp\_fraction} = \frac{\text{comp\_fraction}}{\sum \text{comp\_fraction}}
-\]
+\[ \text{comp\_fraction} = \frac{\text{comp\_fraction}}{\sum \text{comp\_fraction}} \]
 
 ## Requirements
 
@@ -417,3 +354,5 @@ Copyright (C) 2022 Fred Hutchinson Cancer Center
 
 You should have received a copy of The Clear BSD License along with this program.
 If not, see <https://spdx.org/licenses/BSD-3-Clause-Clear.html>.
+
+
