@@ -234,7 +234,9 @@ Barring validation in an additional dataset using an identical reference set of 
 
 ### Mixture Estimation ("Keraon")
 
-The `keraon` function transforms the feature space of a dataset into a new basis defined by the mean vectors of different subtypes across the selected features, creating a simplex meant to encompass the space connecting healthy, also from the reference, to the subtypes of interest. This transformation enables the calculation of the component fraction of each subtype in a sample's feature vector and thus the "burden" of each subtype, which is the product of the sample's tumor fraction (TFX) and its fraction of the subtype.
+The `keraon` function transforms the feature space of a dataset into a new basis defined by
+
+ the mean vectors of different subtypes across the selected features, creating a simplex meant to encompass the space connecting healthy, also from the reference, to the subtypes of interest. This transformation enables the calculation of the component fraction of each subtype in a sample's feature vector and thus the "burden" of each subtype, which is the product of the sample's tumor fraction (TFX) and its fraction of the subtype.
 
 #### Basis Vector Calculation
 
@@ -264,9 +266,9 @@ where $\mathbf{U}$ is the matrix of orthogonal basis vectors.
 
 2. **Regions of the Feature Space:** Determine the region of the feature space based on the transformed sample vector $\mathbf{p}$:
 
-    - **Simplex:** All components of $\mathbf{p}$ are positive.
-    - **Contra-Simplex:** All components of $\mathbf{p}$ are negative.
-    - **Outer-Simplex:** Mixed positive and negative components.
+- **Simplex:** All components of $\mathbf{p}$ are positive.
+- **Contra-Simplex:** All components of $\mathbf{p}$ are negative.
+- **Outer-Simplex:** Mixed positive and negative components.
 
 3. **Adjust for Contra/Outer-Simplex:** If the sample vector is in the contra-simplex region, negate the vector and scale it to match the TFX (this method is not well validated, so please watch out for samples falling in the contra-simplex space):
 
