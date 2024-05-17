@@ -129,7 +129,7 @@ where:
 - The Base is the volume of the $(n-1)$-dimensional simplex formed by the first $n$ vectors.
 - The Height is the perpendicular distance from the $n$-th vector to the base simplex.
 
-Mathematically, if $V_{n-1}$ is the volume of the $(n-1)$-dimensional simplex, and $'\mathbf{v}_0, \mathbf{v}_1, \ldots, \mathbf{v}_{n-1}'$ are the vectors forming the base simplex, then the height $H$ is given by:
+Mathematically, if $V_{n-1}$ is the volume of the $(n-1)$-dimensional simplex, and ($\mathbf{v}_0, \mathbf{v}_1, \ldots, \mathbf{v}_{n-1}$) are the vectors forming the base simplex, then the height $H$ is given by:
 
 $H = \frac{|\mathbf{v}_n - \mathbf{v}_0|}{n}$
 
