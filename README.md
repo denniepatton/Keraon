@@ -111,12 +111,6 @@ This script contains plotting functions designed to visualize the final predicti
 
 ### Methodology
 
-#### Simplex Volume Maximization (Feature Selection)
-
-Simplex volume maximization aims to identify a subset of features within a high-dimensional dataset that maximizes the volume of the simplex formed by the mean vectors of different classes while minimizing the number of features used and the spread at each vertex. This approach identifies features that are highly differentiating for the given classes in a higher-dimensional space, regardless of whether or not those features provide strong separation individually. This process is synergistic with fractional phenotypes estimation performed by Keraon, which uses the simplex to infer class components.
-
-As a precursor to the process, if more than 10 features are passed, they will be screened for normalcy within each class using the Shapiro-Wilk test. See `keraon_helpers.py norm_exp()` for specifics. All features, regardless of whether simplex volume maximization is performed, are min-max standardized before any downstream processes.
-
 #### Simplex Volume Calculation
 
 Given $n$ classes (or subtypes), each represented by a mean vector in a high-dimensional feature space, the volume $V$ of the simplex formed by these vectors can be calculated recursively using the heights and bases of lower-dimensional simplexes.
@@ -305,8 +299,6 @@ $\text{burden}_i = \text{TFX} \cdot \text{comp\_fraction}_i$
 4. **Normalize Fractions:** Ensure the sum of fractions is 1:
 
 $\text{comp\_fraction} = \frac{\text{comp\_fraction}}{\sum \text{comp\_fraction}}$
-
-
 
 ## Requirements
 
