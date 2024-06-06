@@ -123,7 +123,7 @@ where:
 - The Base is the volume of the $(n-1)$-dimensional simplex formed by the first $n$ vectors.
 - The Height is the perpendicular distance from the $n$-th vector to the base simplex.
 
-Mathematically, if $V_{n-1}$ is the volume of the $(n-1)$-dimensional simplex, and $\mathbf{v}_0, \mathbf{v}_1, \ldots, \mathbf{v}_{n-1}$ are the vectors forming the base simplex, then the height $H$ is given by:
+If $V_{n-1}$ is the volume of the $(n-1)$-dimensional simplex, then the height $H$ is given by:
 
 $H = \frac{|\mathbf{v}_n - \mathbf{v}_0|}{n}$
 
@@ -133,7 +133,7 @@ $V = \frac{1}{n} \times V_{n-1} \times \frac{|\mathbf{v}_n - \mathbf{v}_0|}{n}$
 
 #### Objective Function
 
-The objective function to be maximized is the volume of the simplex formed by the mean vectors of the classes, weighted by a penalty factor to account for irregularity and a scaling factor to ensure positive semi-definiteness of covariance matrices. The objective function can be expressed as:
+The objective function to be maximized is the volume of the simplex formed by the mean vectors of the classes, weighted by a penalty factor to account for irregularity and a scaling factor which minimizes variance along edges. The objective function can be expressed as:
 
 $\text{Objective} = \frac{V}{\text{Penalty} \times \text{Scale Factor}}$
 
@@ -147,7 +147,7 @@ where $|\mathbf{v}_i - \mathbf{v}_j|$ denotes the Euclidean distance between pai
 
 #### Scale Factor Calculation
 
-The scale factor is used to ensure that the covariance matrices of the selected features are positive semi-definite and to down-weight simplices that have large variances along edges. It is calculated based on the standard deviations of the projected data onto the edges of the simplex. For each edge $\mathbf{e}_{ij}$ formed by the mean vectors, the variance of the projected data is computed. The scale factor is the sum of the products of these variances:
+The scale factor is used to down-weight simplices that have large variances along edges. It is calculated based on the standard deviations of the projected data onto the edges of the simplex. For each edge $\mathbf{e}_{ij}$ formed by the mean vectors, the variance of the projected data is computed. The scale factor is the sum of the products of these variances:
 
 1. **Edge Calculation:** For each pair of mean vectors $\mathbf{v}_i$ and $\mathbf{v}_j$, compute the edge:
 
@@ -155,7 +155,7 @@ $\mathbf{e}_{ij} = \mathbf{v}_i - \mathbf{v}_j$
 
 2. **Projection and Variance Calculation:** Project the data onto each edge and compute the variance. For a given edge $\mathbf{e}_{ij}$, the projection of the data matrix $\mathbf{X}$ is:
 
-$\text{Proj}(\mathbf{X}, \mathbf{e}_{ij}) = \mathbf{X} \cdot \mathbf{e}_{ij}$
+$\text{Proj}(\mathbf{X}, \mathbf{e}\_{ik}) = \mathbf{X} \cdot \mathbf{e}\_{ij}$
 
 The variance of the projections is:
 
@@ -163,7 +163,7 @@ $\text{Var}(\text{Proj}(\mathbf{X}, \mathbf{e}_{ij}))$
 
 3. **Vertex Standard Deviation Volumes:** Calculate the "volume" of the standard deviations at each vertex. For each vertex $\mathbf{v}_i$, the product of the variances of the edges connected to it is computed:
 
-$\text{Vertex StDev Volume}_i = \prod_{\mathbf{e}_{ij}} \text{Var}(\text{Proj}(\mathbf{X}, \mathbf{e}_{ij}))$
+$\text{Vertex StDev Volume}\_i = \prod_{\mathbf{e}\_{ij}} \text{Var}(\text{Proj}(\mathbf{X}, \mathbf{e}_{ij}))$
 
 4. **Scale Factor:** The total scale factor is the sum of the vertex standard deviation volumes:
 
@@ -208,25 +208,19 @@ The covariance matrix of the mixture $\Sigma_{\text{mixture}}$ is simplified as 
 
 $\Sigma_{\text{mixture}} = I$
 
-This is done to account for large disparities in sample size between anchor classes. The log likelihood for each subtype $i$ is:
+This is done to account for large disparities in sample size between anchor classes. The log likelihood for each subtype $i$ is then:
 
-$\log \mathcal{L}_i = -\frac{1}{2} \left[ (\mathbf{x} - \mu_{\text{mixture}, i})^T I^{-1} (\mathbf{x} - \mu_{\text{mixture}, i}) + \log |I| + k \log (2\pi) \right]$
-
-Since $\Sigma_{\text{mixture}} = I$ and $\log |I| = 0$, this simplifies to:
-
-$\log \mathcal{L}_i = -\frac{1}{2} \left[ (\mathbf{x} - \mu_{\text{mixture}, i})^T (\mathbf{x} - \mu_{\text{mixture}, i}) + k \log (2\pi) \right]$
+$\log \mathcal{L}\_i = -\frac{1}{2} \left[ (\mathbf{x} - \mu\_{\text{mixture}, i})^T I^{-1} (\mathbf{x} - \mu\_{\text{mixture}, i}) + \log |I| + k \log (2\pi) \right]$
 
 #### Optimizing TFX
 
-If the initial log likelihoods are not real, the function automatically optimizes the TFX to maximize the total log likelihood. This is achieved by directly searching over a range of TFX values and selecting the one that maximizes the likelihood:
-
-$\text{TFX}_{\text{optimal}} = \arg \max_{\text{TFX}} \sum_{i=1}^{n} \log \mathcal{L}(\mathbf{x}_i \mid \mu_{\text{mixture}}, \Sigma_{\text{mixture}})$
+If the initial log likelihoods are not real, the function automatically optimizes the TFX to maximize the total log likelihood. This is achieved by directly searching over a range of TFX values and selecting the one that maximizes the likelihood.
 
 #### Weights and Predictions
 
 The function calculates the weights/scores for each subtype using the softmax function applied to the log likelihoods:
 
-$w_i = \frac{e^{\log \mathcal{L}_i}}{\sum_{j} e^{\log \mathcal{L}_j}}$
+$w_i = \frac{e^{\log \mathcal{L}\_i}}{\sum_{j} e^{\log \mathcal{L}_j}}$
 
 where $w_i$ is the weight for subtype $i$.
 
@@ -234,29 +228,21 @@ Barring validation in an additional dataset using an identical reference set of 
 
 ### Mixture Estimation ("Keraon")
 
-The `keraon` function transforms the feature space of a dataset into a new basis defined by
-
- the mean vectors of different subtypes across the selected features, creating a simplex meant to encompass the space connecting healthy, also from the reference, to the subtypes of interest. This transformation enables the calculation of the component fraction of each subtype in a sample's feature vector and thus the "burden" of each subtype, which is the product of the sample's tumor fraction (TFX) and its fraction of the subtype.
+The `keraon` function transforms the feature space of a dataset into a new basis defined by the mean vectors of different subtypes across the selected features, creating a simplex meant to encompass the space connecting healthy, also from the reference, to the subtypes of interest. This transformation enables the calculation of the component fraction of each subtype in a sample's feature vector and thus the "burden" of each subtype, which is the product of the sample's tumor fraction (TFX) and its fraction of the subtype.
 
 #### Basis Vector Calculation
 
-1. **Mean Vectors:** For each subtype $i$, the mean vector $\mu_i$ is calculated from the reference data:
+1. **Mean Vectors:** For each subtype $i$, the mean vector $\mu_i$ is calculated from the reference data using all passed features.
 
-$\mu_i = \frac{1}{n_i} \sum_{j=1}^{n_i} \mathbf{x}_j^{(i)}$
+2. **Directional Vectors:** Next, Keraon subtracts the mean vector of the 'Healthy' subtype $\mu_{\text{Healthy}}$ from the mean vectors of the other subtypes to get directional vectors from healthy to each subtype:
 
-where $n_i$ is the number of samples in subtype $i$, and $\mathbf{x}_j^{(i)}$ is the $j$-th sample of subtype $i$.
+$\mathbf{v}\_i = \mu_i - \mu_{\text{Healthy}}$
 
-2. **Directional Vectors:** Subtract the mean vector of the 'Healthy' subtype $\mu_{\text{Healthy}}$ from the mean vectors of the other subtypes to get directional vectors from healthy to each subtype:
-
-$\mathbf{v}_i = \mu_i - \mu_{\text{Healthy}}$
-
-3. **Orthogonal Basis Vectors:** Apply the Gram-Schmidt process to the directional vectors $\mathbf{v}_i$ to obtain an orthogonal basis, with healthy at the origin and each axis defining a direction along a subtype:
-
-$\mathbf{u}_i = \frac{\mathbf{v}_i - \sum_{j=1}^{i-1} \left( \frac{\mathbf{v}_i \cdot \mathbf{u}_j}{\mathbf{u}_j \cdot \mathbf{u}_j} \right) \mathbf{u}_j}{\left| \mathbf{v}_i - \sum_{j=1}^{i-1} \left( \frac{\mathbf{v}_i \cdot \mathbf{u}_j}{\mathbf{u}_j \cdot \mathbf{u}_j} \right) \mathbf{u}_j \right|}$
+3. **Orthogonal Basis Vectors:** Finally, the the Gram-Schmidt process is applied to the directional vectors $\mathbf{v}_i$ to obtain an orthogonal basis, with healthy at the origin and each axis defining a direction along a subtype.
 
 #### Sample Transformation
 
-1. **Transform to New Basis:** For each sample vector $\mathbf{x}$, transform the vector to the new basis by subtracting $\mu_{\text{Healthy}}$ and projecting onto the orthogonal basis:
+1. **Transform to New Basis:** Each sample vector $\mathbf{x}$, is transformed into the new basis by subtracting $\mu_{\text{Healthy}}$ and projecting onto the orthogonal basis:
 
 $\mathbf{y} = \mathbf{x} - \mu_{\text{Healthy}}$
 
@@ -264,43 +250,23 @@ $\mathbf{p} = \mathbf{y} \cdot \mathbf{U}^T$
 
 where $\mathbf{U}$ is the matrix of orthogonal basis vectors.
 
-2. **Regions of the Feature Space:** Determine the region of the feature space based on the transformed sample vector $\mathbf{p}$:
+2. **Regions of the Feature Space:** Next, Keraon determines the region of the feature space the sample falls in based on the transformed sample vector $\mathbf{p}$:
 
 - **Simplex:** All components of $\mathbf{p}$ are positive.
 - **Contra-Simplex:** All components of $\mathbf{p}$ are negative.
 - **Outer-Simplex:** Mixed positive and negative components.
 
-3. **Adjust for Contra/Outer-Simplex:** If the sample vector is in the contra-simplex region, negate the vector and scale it to match the TFX (this method is not well validated, so please watch out for samples falling in the contra-simplex space):
-
-$\mathbf{p} = -\mathbf{p}$
-
-$\mathbf{p} = \left( \frac{\mathbf{p}}{|\mathbf{p}|} \right) \cdot \text{TFX}$
-
-If the sample vector has some, but not all, negative components, those are zeroed out on the assumption that they do not imply any fraction of that subtype.
+3. **Adjust for Contra/Outer-Simplex:** If the sample vector is in the contra-simplex region, the vector is negated and re-scaled to match the TFX (this method is not well validated, so please watch out for samples falling in the contra-simplex space). If the sample vector has some, but not all, negative components, those are zeroed out on the assumption that they do not imply any fraction of that subtype.
 
 #### Fraction and Burden Calculation
 
-1. **Projected and Orthogonal Lengths:** Calculate the projected length $|\mathbf{p}|$ of the vector that lies in the feature space defined by the simplex, and the orthogonal length $|\mathbf{d}|$ of the vector that completes the sample vector along an axis orthogonal to the feature space:
+1. **Projected and Orthogonal Lengths:** Calculate the projected length $\|\mathbf{p}\|$ of the vector that lies in the feature space defined by the simplex, and the orthogonal length $\|\mathbf{d}\|$ of the vector that completes the sample vector along an axis orthogonal to the feature space.
 
-$|\mathbf{p}| = \sqrt{\sum_{i=1}^{k} p_i^2}$
+2. **Component Fractions:** Normalize the projected and orthogonal components to get the fraction of each subtype and off-target fraction.
 
-$|\mathbf{d}| = \sqrt{\sum_{i=1}^{k} d_i^2}$
+3. **Subtype Burdens:** Calculate the burden of each subtype as the product of TFX and the fraction of the subtype.
 
-where $\mathbf{d}$ is the difference vector between the original vector and its projection.
-
-2. **Component Fractions:** Normalize the projected and orthogonal components to get the fraction of each subtype and off-target fraction:
-
-$\text{comp\_fraction}_i = \frac{p_i}{|\mathbf{p}|} \quad \text{for each } i$
-
-$\text{off\_target\_fraction} = \frac{|\mathbf{d}|}{|\mathbf{p}| + |\mathbf{d}|}$
-
-3. **Subtype Burdens:** Calculate the burden of each subtype as the product of TFX and the fraction of the subtype:
-
-$\text{burden}_i = \text{TFX} \cdot \text{comp\_fraction}_i$
-
-4. **Normalize Fractions:** Ensure the sum of fractions is 1:
-
-$\text{comp\_fraction} = \frac{\text{comp\_fraction}}{\sum \text{comp\_fraction}}$
+4. **Normalize Fractions:** The sum of all fractions and the orthogonal component is then normalized to 1.
 
 ## Requirements
 
