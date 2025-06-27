@@ -187,13 +187,7 @@ Covariance matrices are calculated similarly, shifting components based on the p
 
 #### Weights and Predictions
 
-The function calculates the weights/scores for each subtype using the softmax function applied to the log likelihoods:
-
-$w_i = \frac{e^{\log \mathcal{L}_i}}{\sum_{j} e^{\log \mathcal{L}_j}}$
-
-where $w_i$ is the weight for subtype $i$.
-
-Barring validation in an additional dataset using an identical reference set of anchors to determine an optimal scoring threshold, the prediction for each sample is the subtype with the highest weight.
+The function calculates the weights/scores for each subtype using the softmax function applied to the log likelihoods. Barring validation in an additional dataset using an identical reference set of anchors to determine an optimal scoring threshold, the prediction for each sample is the subtype with the highest weight.
 
 ---
 
@@ -209,16 +203,9 @@ $\mu_i = \frac{1}{n_i} \sum_{j=1}^{n_i} \mathbf{x}_j^{(i)}$
 
 where $n_i$ is the number of samples in subtype $i$, and $\mathbf{x}_j^{(i)}$ is the $j$-th sample of subtype $i$.
 
-2. **Directional Vectors:** The 'Healthy' subtype  vector $\mu_{\text{Healthy}}$ is subtracted from the mean vectors of the other subtypes to get directional vectors from healthy to each subtype:
+2. **Directional Vectors:** The 'Healthy' subtype  vector $\mu_{\text{Healthy}}$ is subtracted from the mean vectors of the other subtypes to get directional vectors from healthy to each subtype.
 
-$\mathbf{v}_i = \mu_i - \mu_{Healthy}$
-
-3. **Orthogonal Basis Vectors:** The Gram-Schmidt process is applied to the directional vectors $\mathbf{v}_i$ to obtain an orthogonal basis, with healthy at the origin and each axis defining a direction along a subtype:
-
-$$u_i = \frac{v_i - \sum_{j=1}^{i-1} \left( \frac{v_i \cdot u_j}{u_j \cdot u_j} \right) u_j}
-{\left| v_i - \sum_{j=1}^{i-1} \left( \frac{v_i \cdot u_j}{u_j \cdot u_j} \right) u_j \right|}$$
-
-The healthy vertex is then extended equally away from the tumor vertices by the maximum negative displacement amongst healthy reference samples, ensuring all healthy references are enclosed by the simplex. The Gram-Schmidt process is re-applied to produce orthonormality.
+3. **Orthogonal Basis Vectors:** The Gram-Schmidt process is then applied to the directional vectors $\mathbf{v}_i$ to obtain an orthogonal basis, with healthy at the origin and each axis defining a direction along a subtype. The healthy vertex is then extended equally away from the tumor vertices by the maximum negative displacement amongst healthy reference samples, ensuring all healthy references are enclosed by the simplex. The Gram-Schmidt process is re-applied to produce orthonormality.
 
 #### Sample Transformation
 
@@ -240,11 +227,7 @@ $|\mathbf{d}| = \sqrt{\sum_{i=1}^{k} d_i^2}$
 
 where $\mathbf{d}$ is the difference vector between the original vector and its projection.
 
-These components are then scaled by the provided tumor fraction to get the total fraction of each subtype, including off-target from the orthogonal component:
-
-$w_i = \frac{e^{L_i}}{\sum_{j} e^{L_j}}$
-
-$v_i = \mu_i - \mu_{Healthy}$
+These components are then scaled by the provided tumor fraction to get the total fraction of each subtype, including off-target from the orthogonal component.
 
 ---
 
