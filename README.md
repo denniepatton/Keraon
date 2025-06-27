@@ -211,14 +211,14 @@ where $n_i$ is the number of samples in subtype $i$, and $\mathbf{x}_j^{(i)}$ is
 
 2. **Directional Vectors:** The 'Healthy' subtype  vector $\mu_{\text{Healthy}}$ is subtracted from the mean vectors of the other subtypes to get directional vectors from healthy to each subtype:
 
-$\vec{v}_i = \mu_i - \mu_{\text{Healthy}}$
+$\mathbf{v}_i = \mu_i - \mu_{Healthy}$
 
 3. **Orthogonal Basis Vectors:** The Gram-Schmidt process is applied to the directional vectors $\mathbf{v}_i$ to obtain an orthogonal basis, with healthy at the origin and each axis defining a direction along a subtype:
 
 $$u_i = \frac{v_i - \sum_{j=1}^{i-1} \left( \frac{v_i \cdot u_j}{u_j \cdot u_j} \right) u_j}
 {\left| v_i - \sum_{j=1}^{i-1} \left( \frac{v_i \cdot u_j}{u_j \cdot u_j} \right) u_j \right|}$$
 
-The healthy vertex is then extended equally away from the tumor vertices by the maximum negative displacement amongst healthy reference samples, ensuring all healthy references are enclosed by the simplex.
+The healthy vertex is then extended equally away from the tumor vertices by the maximum negative displacement amongst healthy reference samples, ensuring all healthy references are enclosed by the simplex. The Gram-Schmidt process is re-applied to produce orthonormality.
 
 #### Sample Transformation
 
@@ -242,9 +242,9 @@ where $\mathbf{d}$ is the difference vector between the original vector and its 
 
 These components are then scaled by the provided tumor fraction to get the total fraction of each subtype, including off-target from the orthogonal component:
 
-$\text{comp\_fraction}_i = \frac{p_i}{|\mathbf{p}|} \quad \text{for each } i$
+$w_i = \frac{e^{L_i}}{\sum_{j} e^{L_j}}$
 
-$\text{off\_target\_fraction} = \frac{|\mathbf{d}|}{|\mathbf{p}| + |\mathbf{d}|}$
+$v_i = \mu_i - \mu_{Healthy}$
 
 ---
 
