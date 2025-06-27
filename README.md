@@ -175,13 +175,15 @@ where:
 - $\Sigma$ is the covariance matrix.
 - $k$ is the number of features.
 
-The log of the likelihood (log likelihood) is:
+The log of the likelihood (log likelihood) is then:
 
 $\log \mathcal{L}(\mathbf{x} \mid \mu, \Sigma) = -\frac{1}{2} \left[ (\mathbf{x} - \mu)^T \Sigma^{-1} (\mathbf{x} - \mu) + \log |\Sigma| + k \log (2\pi) \right]$
 
 For a given sample $\mathbf{x}$ with tumor fraction TFX, the mean vectors of the class mixtures $\mu_{\text{mixture}}$ are calculated as:
 
 $\mu_{\text{mixture}} = \text{TFX} \cdot \mu_{\text{subtype}} + (1 - \text{TFX}) \cdot \mu_{\text{healthy}}$
+
+Covariance matrices are calculated similarly, shifting components based on the provided TFX.
 
 #### Weights and Predictions
 
