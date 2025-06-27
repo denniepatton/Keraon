@@ -7,8 +7,8 @@ Like Keraon, this tool knows what went into the mix.
 <br/><br/>
 
 ## Description
-Keraon utilizes features derived from cfDNA WGS to perform cancer phenotype classification (formerly ctdPheno) and heterogeneous/fractional
-subtype mixture component estimation. To do this Keraon uses a panel of healthy donor and PDX samples which span the subtypes of interest.
+Keraon utilizes features derived from cfDNA WGS to perform cancer phenotype classification (ctdPheno) and heterogeneous/fractional
+phenotype mixture estimation. To do this Keraon uses a panel of healthy donor and PDX samples which span the subtypes of interest as anchors.
 Bioinformatically pure circulating tumor DNA (ctDNA) features garnered from the PDX models, in conjunction with matched features from healthy
 donor cfDNA, are used to construct a latent space on which purity-adjusted predictions are based. Keraon yields both categorical classification
 scores and mixture estimates, and includes a de novo feature selection option based on simplex volume maximization which works synergistically
@@ -18,32 +18,29 @@ with both methods.
 
 When running Keraon, a `results/` directory is generated to store the output files. This directory contains several subfolders, each holding specific results from the analysis:
 
-#### `results/FeatureSpace/`
-
-This folder contains files related to the feature space transformation and preliminary analysis:
-
-- **`cleaned_anchor_reference.pkl`**: A binary file storing the reference dataframe, min, and range dictionaries after preprocessing.
-- **`final-features.tsv`**: A tab-separated values file containing the final features selected for the analysis.
-- **`PCA-1_initial.pdf`**: A PDF file showing the PCA plot before any feature selection.
-- **`PCA-2_post-norm-restrict.pdf`**: A PDF file showing the PCA plot after normal feature restriction (if performed).
-- **`PCA-3_post-MSV.pdf`**: A PDF file showing the PCA plot after maximal simplex volume feature selection (if performed).
-- **`PCA-4_post-MSV_wSamples.pdf`**: A PDF file showing the PCA plot with sample data included after feature selection.
-
-#### `results/ctdPheno/`
-
-This folder contains results related to the ctdPheno classification analysis:
-
-- **`ctdPheno_class-predictions.tsv`**: A tab-separated values file containing the predicted classifications and relative log likelihoods (RLLs) for each sample.
-- **`ROC.pdf`**: A PDF file showing the ROC curve for binary classification performance (if known truth is provided).
-- **`<subtype>_predictions.pdf`**: PDF files for each subtype showing stick and ball plots of predictions based on RLLs.
-
-#### `results/Keraon/`
-
-This folder contains results related to the Keraon mixture estimation analysis:
-
-- **`Keraon_mixture-predictions.tsv`**: A tab-separated values file containing the predicted mixture fractions and burdens for each subtype in each sample.
-- **`ROC_fraction.pdf`**: A PDF file showing the ROC curve for the mixture fraction classification performance (if known truth is provided).
-- **`<subtype>_fraction_predictions.pdf`**: PDF files for each subtype showing stacked bar plots of the mixture fractions.
+```
+results/
+├── feature_analysis/
+│   ├── reference_simplex.pickle            # constructed reference DF + scaling params
+│   ├── pre-selected_site_features.tsv      # final reference features post-scaling used by the model (if -f/--features are provided)
+│   ├── SVM_site_features.tsv               # final reference features post-scaling used by the model (chosen by SVM)
+│   ├── PCA_pre-selected_features.pdf       # using pre-defined features (if -f/--features are provided)
+│   ├── PCA_initial.pdf                     # before feature selection, if using SVM
+│   ├── PCA_post‑SVM.pdf                    # after SVM, if using SVM
+│   ├── PCA_final-basis_wTestSamples.pdf    # using final feature set, with test samples projected in
+│   └── feature_distributions/
+│       ├── reference_features/             # per‑feature PDFs post-scaling (reference)
+│       ├── test_features/                  # per‑feature PDFs post-scaling (test)
+│       └── final-basis_site-features/      # per‑site/per-feature PDFs used by the model (reference + test)
+├── ctdPheno_class‑predictions/
+│   ├── ctdPheno_class‑predictions.tsv      # RLL-based scoring and class predictions
+│   ├── ROC.pdf                             # optional ROC (if truth is provided)
+│   └── <subtype>_predictions.pdf           # stick‑and‑ball visualisation
+└── keraon_mixture‑predictions/
+    ├── Keraon_mixture‑predictions.tsv      # subtype fractions & burdens
+    ├── ROC_fraction.pdf                    # optional ROC (if truth is provided)
+    └── <subtype>_fraction_predictions.pdf  # stacked‑bar burdens
+```
 
 ### Uses
 
@@ -56,15 +53,19 @@ classifying and estimating fractions of castration-resistent prostate cancer (CR
 
 ## Usage
 
-Keraon can be run on the command line using the following arguments:
+Keraon can be run on the command line using the following arguments (examples of correctly formatted feature, key, palette, and tfx files can be found in Keraon/config):
 
 ### Inputs to Keraon.py:
 
 ```
--i, --input           : A tidy-form, .tsv feature matrix with test samples. Should contain 4 columns: "sample", "site", "feature", and "value" (path, required)  
--t, --tfx             : .tsv file with test sample names and tumor fractions. If a third column with "true" subtypes/categories is passed, additional validation will be performed (path, required)  
--r, --reference       : One or more tidy-form, .tsv feature matrices. Should contain 4 columns: "sample", "site", "feature", and "value" (paths, required)  
--k, --key             : .tsv file with sample names and subtypes/categories. One subtype must be "Healthy" (path, required)  
+-i, --input           : A tidy-form, .tsv feature matrix with test samples. Should contain 4 columns: "sample", "site", "feature", and "value".
+                        Sites and features most correspond to those passed with the reference samples or basis
+-t, --tfx             : .tsv file with test sample names and estimated tumor fractions. If a third column with "true" subtypes/categories is passed, additional validation will be performed.
+                        If blanks/nans are passed for tfx for any samples, they will be treated as unknowns and tfx will be predicted (less accurate).
+                        If multiple subtypes are present, they should be separated by commas, e.g. "ARPC,NEPC,DNPC".  
+-r, --reference       : Either a single, pre-generated reference_simplex.pickle file or one or more tidy-form, .tsv feature matrices (in which case a reference key must also be passed with -k).
+                        Tidy files will be used to generate a basis and should contain 4 columns: "sample", "site", "feature", and "value". 
+-k, --key             : .tsv file with reference sample names, subtypes/categories, and purity. One subtype must be "Healthy" with purity=0.
 ```
 
 ### Inputs (extra details):
@@ -73,14 +74,14 @@ Keraon can be run on the command line using the following arguments:
 
 **tfx:** The tfx.tsv file should contain test sample names matching input.tsv and their corresponding tumor fractions. If an additional third column with true subtypes/categories is present, it enables additional validation during processing.
 
-**reference:** One or more ref.tsv files formatted similarly to the input file, containing matching reference feature values with the same four columns.
+**reference:** If not using apre-generated .pickle, one or more ref.tsv files formatted similarly to the input file, containing matching reference feature values with the same four columns.
 
 **key:** This key.tsv file must include sample names found in ref.tsv(s) and their corresponding subtypes/categories, with at least one subtype labeled as "Healthy".
 
 ### Optional arguments:
 
 ```
--d, --doi             : Disease/subtype of interest for plotting and calculating ROCs - must be present in the key (default: 'NEPC')  
+-d, --doi             : Disease/subtype of interest (positive case) for plotting and calculating ROCs. Must be present in key.
 -x, --thresholds      : Tuple containing thresholds for calling the disease of interest (default: (0.5, 0.0311))  
 -f, --features        : File with a list of site_feature combinations to restrict to. Sites and features should be separated by an underscore (path, optional)  
 -s, --svm_selection   : Flag indicating whether to TURN OFF SVM feature selection method (default: True)  
@@ -93,21 +94,12 @@ Keraon can be run on the command line using the following arguments:
 
 **palette:** A .tsv file that provides HEX color codes for categories/samples. The categories/subtype names in this file must match those in the key file.
 
-Examples of correctly formatted feature, key, palette, and tfx files can be found in Keraon/config
-
 ### Contained Scripts:
 
 **Keraon.py** | primary script containing both classification and mixture estimation methods
-**keraon_helpers.py** | contains helper functions called by Keraon.py  
-**keraon_plotters.py** | combines helper functions for plotting outputs of Keraon.py
-
-#### keraon_helpers.py
-
-This script contains functions to perform feature selection, statistical analysis, and classification predictions. Key functionalities include calculating the log likelihoods for subtype prediction using a multivariate normal distribution, optimizing tumor fraction (TFX) to maximize log likelihoods, orthogonalizing feature space vectors using the Gram-Schmidt process, and transforming sample vectors to a new basis. The script also provides methods for standardizing data, evaluating features based on simplex volume maximization, and calculating specificity and sensitivity for classification thresholds. It also includes tools for analyzing normal expression of features and generating ROC curves to assess classification performance.
-
-#### keraon_plotters.py
-
-This script contains plotting functions designed to visualize the final predictions from Keraon. These include generating PCA plots, creating stick and ball plots of subtype predictions from ctdPheno, plotting stacked bar plots to display the fraction and burden of each subtype in a sample for fraction estimation, and constructing ROC curves to evaluate the performance of binary classifiers.
+**utils/keraon_utils.py** | contains utility functions called by Keraon.py for loading and processing data
+**utils/keraon_helpers.py** | contains helper functions called by Keraon.py for ctdpheno and keraon methods
+**utils/keraon_plotters.py** | combines helper functions for plotting outputs of Keraon.py
 
 ### Methodology
 
@@ -305,35 +297,29 @@ $\text{comp\_fraction} = \frac{\text{comp\_fraction}}{\sum \text{comp\_fraction}
 ## Requirements
 
 Keraon uses mostly standard library imports like NumPy and SciPy and has been tested on Python 3.9 and 3.10.
-To create a tested environment using the provided `requirements.txt` file generated by Conda, follow these steps:
+To create a tested environment using the provided `keraon_requirements.yml` file, follow these steps:
 
-1. **Install Conda**: Ensure you have Conda installed. You can download and install Conda from the [official website](https://docs.conda.io/en/latest/miniconda.html).
+1. **Install Micromambaa**: Ensure you have Micromamba installed. You can download and install it following the instructions on the [official website](https://mamba.readthedocs.io/en/latest/installation/micromamba-installation.html).
 
-2. **Download the `requirements.txt` File**: Make sure the `requirements.txt` file is in your current working directory.
+2. **Download the `keraon_requirements.yml` File**: Make sure the file is in your current working directory.
 
-3. **Create the Environment**: Use the following command to create a new Conda environment named `<env>` using the dependencies specified in the `requirements.txt` file:
+3. **Create the Environment**: Use the following command to create a new Micromamba environment named `keraon` using the dependencies specified in the `keraon_requirements.yml` file:
 
     ```bash
-    conda create --name <env> --file requirements.txt
+    micromamba create -f keraon-requirements.yml
     ```
-
-   Replace `<env>` with your desired environment name.
 
 4. **Activate the Environment**: Once the environment is created, activate it using:
 
     ```bash
-    conda activate <env>
+    conda activate keraon
     ```
-
-   Again, replace `<env>` with the name of your environment.
 
 5. **Verify the Installation**: To ensure all packages are installed correctly, you can list the packages in the environment using:
 
     ```bash
-    conda list
+    micromamba list
     ```
-
-This process will set up a Conda environment with all the necessary packages and versions specified in `requirements.txt`
 
 ## Contact
 If you have any questions or feedback, please contact me at:  

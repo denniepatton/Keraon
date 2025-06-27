@@ -1,16 +1,6 @@
 #!/usr/bin/python
 # Robert Patton, rpatton@fredhutch.org
-# v2.2, 5/2/2024
-
-"""
-This newest iteration of Keraon aims to combine ctdPheno and Keraon together, to give dual output predictions
-for any appropriately formatted datasets. It will also be made more user-friendly in true script form, with
-exmaple runs saved in the accompanying EXAMPLE_RUNS.txt file. I plan to test new feature selection methods, as
-well as new methods for Keraon (kept in my own notes for now). Also add simulated run option for both, based on
-the references (see PreviousModels tree).
-"""
-
-# TODO: ship with binary for use in LuCaPs.
+# v3.0, 3/13/2025
 
 import os
 import pickle
@@ -18,64 +8,23 @@ import argparse
 import numpy as np
 import pandas as pd
 from sys import stdout
-from keraon_helpers import *
-from keraon_plotters import *
-from scipy.special import logsumexp
+from scipy.stats import multivariate_normal
+from scipy.special import softmax
+from utils.keraon_utils import *
+from utils.keraon_helpers import *
+from utils.keraon_plotters import *
 
+# These Triton features are liable to depth bias / outliers or are intended for larger regions (e.g. gene bodies, not TFBS sites)
+drop_features = ['mean-depth', 'fragment-diversity', 'fragment-entropy', 'var-ratio', # highly biased by (or are measurements of) depth
+                 'central-loc', 'plus-one-pos', 'minus-one-pos', 'plus-minus-ratio']  # based on peak-calling, which may struggle with low-coverage regions
+limit_features = ['central-depth', 'central-diversity']
+# limit_features = None
 
-def ctdpheno(ref_df, df):
-    """
-    Calculate TFX-shifted multivariate group identity relative log likelihoods (RLLs).
-
-    Parameters:
-    ref_df (DataFrame): Reference DataFrame with 'Subtype' column and feature columns.
-    df (DataFrame): DataFrame with 'TFX' column and feature columns. Index should be sample identifiers.
-
-    Returns:
-    DataFrame: DataFrame with predictions and RLLs for each sample.
-    """
-    print('Calculating TFX-shifted multivariate group identity RLLs...')
-
-    samples = df.index.tolist()
-    subtypes = ref_df['Subtype'].unique().tolist()
-    subtypes.remove('Healthy')
-
-    # Initialize DataFrame for storing predictions
-    cols = subtypes + ['TFX', 'TFX_shifted', 'Prediction']
-    predictions = pd.DataFrame(index=df.index, columns=cols)
-
-    # Set the correct data types for the columns
-    predictions[subtypes] = predictions[subtypes].astype(float)
-    predictions[['TFX', 'TFX_shifted']] = predictions[['TFX', 'TFX_shifted']].astype(float)
-    predictions['Prediction'] = predictions['Prediction'].astype(str)
-
-    # Calculate RLLs for each sample
-    for i, sample in enumerate(samples, start=1):
-        print(f'\rRunning samples | completed: [{i}/{len(samples)}]', end='')
-
-        tfx = df.loc[sample, 'TFX']
-        feature_vals = df.loc[sample].drop('TFX').to_numpy()
-        # Calculate mean and covariance for 'Healthy' subtype
-        healthy_data = ref_df[ref_df['Subtype'] == 'Healthy'].iloc[:, 1:]
-        mu_healthy = healthy_data.mean().to_numpy()
-        cov_healthy = np.cov(healthy_data.to_numpy(), rowvar=False)
-        # Calculate means for other subtypes
-        mu_subs = [ref_df[ref_df['Subtype'] == subtype].iloc[:, 1:].mean().to_numpy() for subtype in subtypes]
-        # Calculate RLLs
-        log_likelihoods = calculate_log_likelihoods(tfx, feature_vals, mu_healthy, cov_healthy, mu_subs, subtypes)
-
-        # If all log likelihoods are -inf, optimize 'TFX' to maximize total log likelihood
-        if np.all(np.isinf(log_likelihoods)) or np.isclose(logsumexp(log_likelihoods), 0):
-            tfx_shifted = optimize_tfx(feature_vals, mu_healthy, cov_healthy, mu_subs, subtypes)
-            log_likelihoods = calculate_log_likelihoods(tfx_shifted, feature_vals, mu_healthy, cov_healthy, mu_subs, subtypes)
-        else:
-            tfx_shifted = tfx
-
-        # Calculate weights and update predictions DataFrame
-        update_predictions(predictions, sample, tfx, tfx_shifted, log_likelihoods, subtypes)
-
-    print('\nFinished.')
-    return predictions
+# feature-specific scaling to make normal-like (applies to Triton features only)
+scaling_methods = {'fragment-diversity': lambda x: np.log(x+10e-6),
+                   'plus-minus-ratio': lambda x: np.log(x+10e-6),
+                   'np-period': lambda x: np.log(x+10e-6),
+                   'mean-depth': lambda x: np.log(x+10e-6)}
 
 
 def keraon(ref_df, df):
@@ -87,11 +36,13 @@ def keraon(ref_df, df):
     The transformation is performed by subtracting the mean vector of the 'Healthy' subtype from the mean vectors 
     of the other subtypes, and then orthogonalizing the resulting vectors using the Gram-Schmidt process. 
     This results in a set of orthogonal basis vectors, each pointing in the direction of a different subtype.
+    If Healthy samples are not all contained within the final (positive) basis, the function will shift the 'Healthy' center/origin
+    to ensure that all healthy reference samples are within the simplex.
 
     After transforming the feature space, the function calculates the components of each sample's feature vector 
-    in this new basis. These components represent the sample's "fraction" of each subtype. The function also 
-    calculates the "burden" of each subtype, which is the product of the sample's tumor fraction (TFX) and its 
-    fraction of the subtype.
+    in this new basis. These components represent the sample's "burden" of each subtype. The function also 
+    calculates the "fraction" of each subtype, which is the product of the sample's tumor fraction (TFX) and its 
+    subtype burden.
 
     Parameters:
     ref_df (DataFrame): The reference dataframe containing the mean feature values for each subtype.
@@ -111,7 +62,6 @@ def keraon(ref_df, df):
     for subtype in subtypes:
         df_temp = ref_df[ref_df['Subtype'] == subtype].iloc[:, 1:]
         mean_vectors.append(df_temp.mean(axis=0).to_numpy())
-        # mean_vectors.append(df_temp.median(axis=0).to_numpy())
 
     # Check if TFX column exists
     if 'TFX' not in df:
@@ -134,7 +84,24 @@ def keraon(ref_df, df):
 
     # Calculate basis vectors
     basis_vectors = [mean_vectors[i] - mean_vectors[hd_idx] for i in range(len(subtypes)) if i != hd_idx]
-    basis = gram_schmidt(basis_vectors)  # unit vectors in the direction of each subtype
+    raw_basis = gram_schmidt(basis_vectors)  # unit vectors in the direction of each subtype
+    basis = raw_basis
+
+    # Shift the 'Healthy' center/origin to ensure all healthy reference samples are within the simplex
+    min_coeff = 0.0
+    for idx in ref_df.index[ref_df['Subtype'] == 'Healthy']:
+        y = (ref_df.loc[idx, features].values - mean_vectors[hd_idx])
+        coeffs, _ = transform_to_basis(y, raw_basis)
+        min_coeff = min(min_coeff, coeffs.min())  # most negative value
+
+    alpha_global = max(0.0, -min_coeff)
+
+    if alpha_global > 0.0:
+        shift_vec            = alpha_global * np.sum(raw_basis, axis=0)
+        mean_vectors[hd_idx]    = mean_vectors[hd_idx] - shift_vec
+
+    shifted_basis = [mean_vectors[i] - mean_vectors[hd_idx] for i in range(len(subtypes)) if i != hd_idx]
+    basis = gram_schmidt(shifted_basis) # final orthonormal basis
 
     # Process each sample
     samples = list(df.index)
@@ -175,214 +142,308 @@ def keraon(ref_df, df):
     return basis_predictions
 
 
+def ctdpheno(ref_df, df):
+    """
+    Calculate TFX-shifted multivariate group identity relative log likelihoods (RLLs).
+
+    Parameters:
+    ref_df (DataFrame): Reference DataFrame with 'Subtype' column and feature columns.
+    df (DataFrame): DataFrame with 'TFX' column and feature columns. Index should be sample identifiers.
+
+    Returns:
+    DataFrame: DataFrame with predictions and RLLs for each sample.
+    """
+    print('Calculating TFX-shifted multivariate group identity RLLs...')
+
+    samples = df.index.tolist()
+    subtypes = ref_df['Subtype'].unique().tolist()
+    subtypes.remove('Healthy')
+
+    # Initialize DataFrame for storing predictions
+    cols = subtypes + ['TFX', 'Prediction']
+    predictions = pd.DataFrame(index=df.index, columns=cols)
+
+    # Set the correct data types for the columns
+    predictions[subtypes] = predictions[subtypes].astype(float)
+    predictions['TFX'] = predictions['TFX'].astype(float)
+    predictions['Prediction'] = predictions['Prediction'].astype(str)
+
+    def calculate_log_likelihoods(tfx, feature_vals, mu_healthy, cov_healthy, mu_subs, subtypes):
+        """
+        Calculate log likelihoods for given TFX value and feature values.
+        """
+        log_likelihoods = []
+        for subtype in subtypes:
+            mu_mixture = tfx * mu_subs[subtypes.index(subtype)] + (1 - tfx) * mu_healthy
+            cov_subs = [np.cov(ref_df[ref_df['Subtype'] == subtype].iloc[:, 1:].to_numpy(), rowvar=False) for subtype in subtypes]
+            cov_mixture = tfx * cov_subs[subtypes.index(subtype)] + (1 - tfx) * cov_healthy
+            reg_factor = 1e-6 * np.trace(cov_mixture) / cov_mixture.shape[0]
+            cov_mixture += np.eye(cov_mixture.shape[0]) * reg_factor
+            # cov_mixture = np.eye(cov_healthy.shape[0])
+            log_likelihood = multivariate_normal.logpdf(feature_vals, mean=mu_mixture, cov=cov_mixture)
+            log_likelihoods.append(log_likelihood)
+        return log_likelihoods
+
+    def update_predictions(predictions, sample, tfx, log_likelihoods, subtypes):
+        """
+        Update predictions DataFrame with calculated values.
+        """
+        weights = softmax(log_likelihoods)
+
+        predictions.loc[sample, 'TFX'] = tfx
+        max_weight = 0
+        max_subtype = 'NoSolution'
+        for subtype in subtypes:
+            weight = np.round(weights[subtypes.index(subtype)], 4)
+            predictions.loc[sample, subtype] = weight
+            if weight > max_weight:
+                max_weight = weight
+                max_subtype = subtype
+
+        predictions.loc[sample, 'Prediction'] = max_subtype
+
+    # Process each sample
+    samples = list(df.index)
+    n_complete, n_samples = 0, len(samples)
+    for sample in samples:
+        tfx = df.loc[sample, 'TFX']
+        feature_vals = df.loc[sample].drop('TFX').to_numpy()
+        # Calculate mean and covariance for 'Healthy' subtype
+        healthy_data = ref_df[ref_df['Subtype'] == 'Healthy'].iloc[:, 1:]
+        mu_healthy = healthy_data.mean().to_numpy()
+        cov_healthy = np.cov(healthy_data.to_numpy(), rowvar=False)
+        # Calculate means for other subtypes
+        mu_subs = [ref_df[ref_df['Subtype'] == subtype].iloc[:, 1:].mean().to_numpy() for subtype in subtypes]
+        # Calculate RLLs
+        log_likelihoods = calculate_log_likelihoods(tfx, feature_vals, mu_healthy, cov_healthy, mu_subs, subtypes)
+
+        # Calculate weights and update predictions DataFrame
+        update_predictions(predictions, sample, tfx, log_likelihoods, subtypes)
+
+        # Update progress
+        n_complete += 1
+        stdout.write('\rRunning samples | completed: [{0}/'.format(n_complete) + str(n_samples) + ']')
+        stdout.flush()
+
+    print('\nFinished.')
+    return predictions
+
+
 def main():
     parser = argparse.ArgumentParser(description='\n### Keraon.py ###')
 
     # Required arguments
-    parser.add_argument('-i', '--input', required=True, 
-                        help='A tidy-form, .tsv feature matrix with test samples. Should contain 4 columns: "sample", "site", "feature", and "value".')
-    parser.add_argument('-t', '--tfx', required=True, 
-                        help='.tsv file with test sample names and tumor fractions. If a third column with "true" subtypes/categories is passed, additional validation will be performed.')
-    parser.add_argument('-r', '--reference', nargs='*', required=True, 
-                        help='One or more tidy-form, .tsv feature matrices. Should contain 4 columns: "sample", "site", "feature", and "value".')
-    parser.add_argument('-k', '--key', required=True, 
-                        help='.tsv file with sample names and subtypes/categories. One subtype must be "Healthy".')
 
+    parser.add_argument('-r', '--reference_data', nargs='*', required=True, 
+                        help="""Either a single, pre-generated reference_simplex.pickle file or one or more tidy-form, .tsv feature matrices (in which case a reference key must also be passed with -k).
+                        Tidy files will be used to generate a basis and should contain 4 columns: "sample", "site", "feature", and "value".""")
+    parser.add_argument('-i', '--input_data', required=True, 
+                        help="""A tidy-form, .tsv feature matrix with test samples. Should contain 4 columns: "sample", "site", "feature", and "value".
+                        Sites and features most correspond to those passed with the reference samples or basis""")
+    parser.add_argument('-t', '--tfx', required=True, 
+                        help=""".tsv file with test sample names and estimated tumor fractions. If a third column with "true" subtypes/categories is passed, additional validation will be performed.
+                        If blanks/nans are passed for tfx for any samples, they will be treated as unknowns and tfx will be predicted (less accurate).
+                        If multiple subtypes are present, they should be separated by commas, e.g. "ARPC,NEPC,DNPC".""")
+    parser.add_argument('-k', '--reference_key', required=True,
+                        help='.tsv file with reference sample names, subtypes/categories, and purity. One subtype must be "Healthy" with purity=0.')
     # Optional arguments
-    parser.add_argument('-d', '--doi', default='NEPC', 
-                        help='Disease/subtype of interest for plotting and calculating ROCs - must be present in key.')
-    parser.add_argument('-x', '--thresholds', nargs=2, type=float, default=(0.5, 0.0311), 
-                        help='Tuple containing thresholds for calling the disease of interest.')
+    parser.add_argument('-d', '--doi', default=None, 
+                        help='Disease/subtype of interest (positive case) for plotting and calculating ROCs. Must be present in key.')
+    parser.add_argument('-x', '--thresholds', default=(0.322, 0.025), 
+                        help='Thresholds for calling disease of interest / positive class (ctdPheno, Keraon).')
     parser.add_argument('-f', '--features', default=None, 
                         help='File with a list of site_feature combinations to restrict to. Sites and features should be separated by an underscore.')
     parser.add_argument('-s', '--svm_selection', action='store_false', default=True, 
-                        help='Flag indicating whether to TURN OFF SVM feature selection method.')
+                        help='Flag indicating whether to TURN OFF SVM feature selection method. SVM will not run if a -f/--features file is passed.')
     parser.add_argument('-p', '--palette', default=None, 
                         help='tsv file with matched categories/samples and HEX color codes. Subtype/category names must match those passed with the -t and -k options.')
-
     args = parser.parse_args()
 
     # Paths
-    input_path, tfx_path, ref_path, key_path = args.input, args.tfx, args.reference, args.key
-    doi, thresholds, perform_svm = args.doi, args.thresholds, args.svm_selection
-    features_path, palette_path = args.features, args.palette
+    input_path, tfx_path, ref_path, key_path = args.input_data, args.tfx, args.reference_data, args.reference_key
+    doi, thresholds, palette_path = args.doi, args.thresholds, args.palette
+    features_path, perform_svm  = args.features, args.svm_selection
 
-    print('\n### Welcome to Keraon ###\nLoading data . . .')
-
-    # Load palette
-    palette = {row[0]: row[1] for row in pd.read_table(palette_path, sep='\t', header=None).itertuples(False, None)} if palette_path else None
-
-    # Load features
-    if features_path is not None:
-        with open(features_path) as f:
-            features = f.read().splitlines()
+    print('\n### Welcome to Keraon ###\nLoading data . . .\n')
+    # Quick sanity check
+    """ Keraon can be used in essentially three ways, with regards to the reference data:
+    1. Use a pre-generated reference_simplex.pickle file passed with -r, in which case the -k option is ignored/not needed.
+    2. Use a tsv feature matrix(ices) passed with -r, in which case a reference key must also be passed with -k, along with
+       pre-chosen features passed with -f. No SVM feature selection will be performed. A pickle file will be generated.
+    3. Use a tsv feature matrix(ices) passed with -r, in which case a reference key must also be passed with -k. If a feature
+       list is not passed with -f, SVM feature selection will be performed. A pickle file will be generated.
+    """
+    if ref_path[0].endswith('.pickle'):
+        print("Loading reference data from a pre-generated pickle file."
+              "\nAny passed reference key (-k) will be used for palette only, and features (-f) will be IGNORED.")
+        load_features, perform_svm = False, False
+    elif features_path is not None and key_path is not None:
+        print("Generating a reference basis from the passed tsv feature matrix and key, using the features passed with -f.")
+        load_features, perform_svm = True, False
+    elif features_path is None and key_path is not None:
+        print("Generating a reference basis from the passed tsv feature matrix and key, using SVM feature selection.")
+        load_features, perform_svm = False, True
     else:
-        features = None
+        print("Error: Invalid combination of input data, reference key, and features. Please check your inputs. Exiting.")
+        exit(1)
 
     # Create necessary directories
     os.makedirs('results/', exist_ok=True)
-    os.makedirs('results/FeatureSpace/', exist_ok=True)
-    os.makedirs('results/ctdPheno/', exist_ok=True)
-    os.makedirs('results/Keraon/', exist_ok=True)
-
-    # prepare test dataframe:
-    test_df = pd.read_table(input_path, sep='\t', index_col=0, header=0)
-    test_df['site'] = test_df['site'].str.replace('_', '-')  # ensure no _ in site names
-    test_df['feature'] = test_df['feature'].str.replace('_', '-')  # ensure no _ in feature names
-    test_df['cols'] = test_df['site'].astype(str) + '_' + test_df['feature']
-    test_df = test_df.pivot_table(index=[test_df.index.values], columns=['cols'], values='value')
-    test_labels = pd.read_table(tfx_path, sep='\t', index_col=0, header=None)
-    if len(test_labels.columns) == 2:  # truth values supplied
-        if not (test_labels[2]=='Unknown').all():
-            ordering = test_labels.index
-            ordering.names = ['Sample']
-        else:
-            ordering = None
-        truth_vals = test_labels.iloc[:, 1:]
-        truth_vals.columns = ['Truth']
-        test_labels = test_labels.drop(2, axis=1)
+    processing_dir = 'results/feature_analysis/'
+    keraon_dir = 'results/keraon_mixture-predictions/'
+    ctdpheno_dir = 'results/ctdPheno_class-predictions/'
+    os.makedirs(processing_dir, exist_ok=True)
+    os.makedirs(keraon_dir, exist_ok=True)
+    os.makedirs(ctdpheno_dir, exist_ok=True)
+    
+    # Load reference key
+    if key_path is not None:
+        print(f"\nLoading reference key from: {key_path}")
+        ref_labels = load_reference_key(key_path)
     else:
-        ordering = None
-        truth_vals = None
-    test_labels.columns = ['TFX']
+        print("No reference key provided. Using default labels.")
+        ref_labels = None
 
-    # prepare reference dataframe:
-    override_data_generation = True
-    direct = 'results/FeatureSpace/'
-    ref_binary = 'results/FeatureSpace/cleaned_anchor_reference.pkl'
-    if not os.path.isfile(ref_binary) or override_data_generation:
-        print('Creating reference dataframe . . .')
-        ref_dfs = [pd.read_table(path, sep='\t', index_col=0, header=0) for path in ref_path]
-        ref_df = pd.concat(ref_dfs)
-        ref_df['site'] = ref_df['site'].str.replace('_', '-')  # ensure no _ in site names
-        ref_df['feature'] = ref_df['feature'].str.replace('_', '-')  # ensure no _ in feature names
-        ref_df['cols'] = ref_df['site'].astype(str) + '_' + ref_df['feature']
-        if features is not None:
-            ref_df = ref_df[ref_df['cols'].isin(features)]
-        ref_df = ref_df.pivot_table(index=[ref_df.index.values], columns=['cols'], values='value')
-        ref_labels = pd.read_table(key_path, sep='\t', index_col=0, header=0, names=['Subtype'])
-
-        # Get the common columns in both dataframes
-        common_columns = ref_df.columns.intersection(test_df.columns)
-        # Get columns with no NaNs in either dataframe
-        no_nan_columns = ref_df.columns[ref_df.notna().all()].intersection(test_df.columns[test_df.notna().all()])
-        # Get the intersection of common_columns and no_nan_columns
-        final_columns = common_columns.intersection(no_nan_columns)
-        # Restrict both dataframes to the final_columns
-        ref_df = ref_df[final_columns]
-        test_df = test_df[final_columns]
-
-        # filter features
-        print('Filtering features . . .')
-        # Get the intersection of ref_df's index and ref_labels's index
-        common_index = ref_df.index.intersection(ref_labels.index)
-        # Get the labels that are in ref_labels but not in ref_df
-        missing_labels = ref_labels.index.difference(ref_df.index)
-        # Print the missing labels
-        print(f"Missing labels: {missing_labels.tolist()}")
-        # Filter ref_labels to only include labels that are in ref_df
-        ref_labels = ref_labels.loc[common_index]
-        # Now you can safely index ref_df with ref_labels's index
-        ref_df = ref_df.loc[ref_labels.index]
-        ref_df = ref_df.dropna(axis=1, how='any') # drop any features with missing values
-        drop_features = ['mean-depth', 'np-amplitude', 'var-ratio', 'fragment-entropy', 'fragment-diversity', 'plus-minus-ratio',
-                         'central-loc', 'minus-one-pos', 'plus-one-pos'] # these Triton features are liable to depth bias / outliers or are intended for larger regions
-        drop_regex = '|'.join(drop_features)  # creates a regex that matches any string in drop_features
-        ref_df = ref_df.drop(columns=ref_df.filter(regex=drop_regex).columns)
-
-        if perform_svm:
-            plot_pca(pd.merge(ref_labels, ref_df, left_index=True, right_index=True), direct, palette, "PCA-1_initial")
-            if len(ref_df.columns) > 10:  # skip this step if few features
-                ref_df = norm_exp(pd.merge(ref_labels, ref_df, left_index=True, right_index=True), direct)[0] # only use nominally "normal" features
-                plot_pca(pd.merge(ref_labels, ref_df, left_index=True, right_index=True), direct, palette, "PCA-2_post-norm-restrict")
-            # scale features:
-            ref_df, min_dict, range_dict = minmax_standardize(pd.merge(ref_labels, ref_df, left_index=True, right_index=True))
-            ref_df = maximal_simplex_volume(ref_df)
-            df_train = pd.merge(ref_labels, ref_df, left_index=True, right_index=True)
-            plot_pca(df_train, direct, palette, "PCA-3_post-MSV")
-            df_train.to_csv(direct + 'final-features.tsv', sep="\t")
-        else:
-            ref_df, min_dict, range_dict = minmax_standardize(pd.merge(ref_labels, ref_df, left_index=True, right_index=True))
-            df_train = ref_df
-            df_train.to_csv(direct + 'final-features.tsv', sep="\t")
-        print('Finished. Saving reference dataframe . . .')
-        with open(ref_binary, 'wb') as f:
-            pickle.dump([df_train, min_dict, range_dict], f)
+    # Load test labels (tfx, and truth if provided)
+    print(f"\nLoading test labels (tumor fraction) from: {tfx_path}")
+    test_labels, truth_vals = load_test_labels(tfx_path)
+    if truth_vals is not None:
+        print("Loaded truth values for test samples - validation analysis and thresholding will be conducted.")
     else:
-        print('Loading reference dataframe . . .')
-        with open(ref_binary, 'rb') as f:
-            df_train, min_dict, range_dict = pickle.load(f)
+        print("No truth values provided for test samples - validation analysis and thresholding will not be conducted.")
 
-    # restrict test_df features to those identified in ref_df and anchor feature processing
-    test_df = test_df[df_train.drop('Subtype', axis=1).columns]
-    # scale features identically to ref_df for consistency in the same space
-    test_df = minmax_standardize(test_df, min_dict=min_dict, range_dict=range_dict)[0]
+    # Load palette
+    if ref_labels is not None:
+        palette = load_palette(palette_path, ref_labels)
+    else:
+        palette = load_palette(palette_path)
+
+    # Load features
+    if features_path is not None and load_features:
+        print(f"\nLoading pre-selected features from: {features_path}")
+        print("(SVM feature selection will be skipped)")
+        with open(features_path) as f:
+            features = f.read().splitlines()
+        # Validate feature format
+        for i, feature_line in enumerate(features):
+            parts = feature_line.split('_')
+            if len(parts) != 2:
+                print(f"Warning: Feature '{feature_line}' at line {i+1} in '{features_path}' does not follow the 'site_feature' format (exactly one underscore). Exiting.")
+                exit(1)
+    
+    # Load reference data
+    print(f"\nLoading reference data from: {ref_path}")
+    if ref_path[0].endswith('.pickle'):
+        # Load the pre-generated reference_simplex.pickle file
+        with open(ref_path[0], 'rb') as f:
+            df_train, scaling_params = pickle.load(f)
+    else:
+        # Load reference data
+        ref_df, scaling_params = load_triton_fm(ref_path, scaling_methods, processing_dir, palette, ref_labels=ref_labels, plot_distributions=True, limit_features=limit_features)
+        # Drop specified features from the reference dataframe
+        if drop_features:
+            print(f"\nApplying feature dropping based on `drop_features` list: {drop_features}")
+            drop_regex = '|'.join([re.escape(feature_name) for feature_name in drop_features]) # Escape to treat as literal strings
+            # Drop from ref_df
+            ref_cols_to_drop = ref_df.columns[ref_df.columns.str.contains(drop_regex, regex=True)]
+            if not ref_cols_to_drop.empty:
+                ref_df = ref_df.drop(columns=ref_cols_to_drop)
+        if perform_svm and not load_features:
+            plot_pca(pd.merge(ref_labels, ref_df, left_index=True, right_index=True), processing_dir, palette, "PCA_initial")
+            df_train = pd.merge(ref_labels['Subtype'], ref_df, left_index=True, right_index=True)
+            df_train = maximal_simplex_volume(df_train)
+            df_train = pd.merge(ref_labels['Subtype'], df_train, left_index=True, right_index=True)
+            plot_pca(df_train, processing_dir, palette, "PCA_post-SVM")
+            print('Finished. Saving reference dataframe . . .')
+            df_train.to_csv(processing_dir + 'SVM_site_features.tsv', sep="\t")
+        elif load_features and not perform_svm:
+            print(f"Using pre-selected features.")
+            # Ensure that only features present in both the list and the DataFrame are selected
+            features_to_keep = [feature for feature in features if feature in ref_df.columns]
+            missing_features = [feature for feature in features if feature not in ref_df.columns]
+            if missing_features:
+                print(f"Warning: The following features from the feature list were not found in the reference data and will be ignored: {missing_features}")
+            if not features_to_keep:
+                print(f"Error: No features from the provided list were found in the reference data. Exiting.")
+                exit(1)
+            ref_df = ref_df[features_to_keep]
+            df_train = pd.merge(ref_labels['Subtype'], ref_df, left_index=True, right_index=True)
+            plot_pca(df_train, processing_dir, palette, "PCA_pre-selected_features")
+            print('Finished. Saving reference dataframe . . .')
+            df_train.to_csv(processing_dir + 'pre-selected_site_features.tsv', sep="\t")
+        else:
+            print('No SVM feature selection or pre-selected features were passed. Exiting.')
+            exit(1)
+        # Save the reference dataframe and scaling parameters to a pickle file
+        with open(processing_dir + 'reference_simplex.pickle', 'wb') as f:
+            pickle.dump((df_train, scaling_params), f)
+        print(f'Reference dataframe and scaling parameters saved as {processing_dir}reference_simplex.pickle')
+
+
+    # Load test data
+    print(f"\nLoading test data from: {input_path}")
+    test_df, _ = load_triton_fm(input_path, scaling_methods, processing_dir, palette, feature_scaling_params=scaling_params, plot_distributions=True)
+    # Define the required features from the training data
+    required_features = df_train.drop('Subtype', axis=1).columns
+    # Check for missing features in test_df
+    missing_in_test = [feature for feature in required_features if feature not in test_df.columns]
+    if missing_in_test:
+        print(f"Warning: The test data is missing the following features that are present in the reference/training data: {missing_in_test}")
+        print("The test data will be restricted to the features common with the training data.")
+    # Restrict test_df features to those identified and present in df_train and also present in the current test_df to avoid KeyErrors
+    common_features = [feature for feature in required_features if feature in test_df.columns]
+    if not common_features:
+        print("Error: No common features found between the test data and the required features from the training data. Exiting.")
+        exit(1)
+    test_df = test_df[common_features]
     df_test = pd.merge(test_labels, test_df, left_index=True, right_index=True, how='inner')
+    if df_test.empty:
+        print("Warning: After merging test labels and test data (and aligning features), the resulting df_test is empty.")
+        print("This might be due to no common sample IDs between test_labels and test_df after feature alignment, or no common features. Exiting.")
+        exit(1) 
 
     if truth_vals is not None:
-        plot_pca(df_train, direct, palette, "PCA-4_post-MSV_wSamples", post_df=pd.merge(truth_vals, df_test, left_index=True, right_index=True))
+        plot_pca(df_train, processing_dir, palette, "PCA_final-basis_wTestSamples", post_df=pd.merge(truth_vals, df_test, left_index=True, right_index=True))
     else:
-        plot_pca(df_train, direct, palette, "PCA-4_post-MSV_wSamples", post_df=df_test)
+        plot_pca(df_train, processing_dir, palette, "PCA_final-basis_wTestSamples", post_df=df_test)
 
-    # run ctdPheno
+    # Print complete feature distributions for selected site_features, showing the test samples against the reference
+    plot_combined_feature_distributions(df_train, df_test, processing_dir + 'feature_distributions/final-basis_site-features', palette)
+
+    # run ctdPheno and plot results
     print("\n### Running experiment: classification (ctdPheno)")
-    direct = 'results/ctdPheno/'
-    subtypes = list(df_train['Subtype'].unique())
-    subtypes.remove('Healthy')
-
     ctdpheno_preds = ctdpheno(df_train, df_test)
+    ctdpheno_preds = ctdpheno_preds.sort_values(['TFX'], ascending=False)
     if truth_vals is not None:
-        ctdpheno_preds = pd.merge(truth_vals, ctdpheno_preds, left_index=True, right_index=True, how='right')
-    if ordering is not None:
-        ctdpheno_preds = ctdpheno_preds.reindex(ordering)
-    elif truth_vals is not None:
-        ctdpheno_preds = ctdpheno_preds.sort_values(['Truth', 'TFX'], ascending=[True, False])
+        ctdpheno_preds = pd.merge(truth_vals, ctdpheno_preds, left_index=True, right_index=True)
     else:
-        ctdpheno_preds = ctdpheno_preds.sort_values(['TFX'], ascending=False)
-    # N.B. please remove truth values which are heterogenous mixtures (e.g. MIX) for a proper ROC, as seen below
+        ctdpheno_preds['Truth'] = 'Unknown'
+    ctdpheno_preds.to_csv(ctdpheno_dir + 'ctdPheno_class-predictions.tsv', sep="\t")
     if not (ctdpheno_preds['Truth'] == 'Unknown').all():
-        threshold = plot_roc(ctdpheno_preds[ctdpheno_preds['Truth'] != 'MIX'], direct, doi)[3]
+        threshold = plot_roc(ctdpheno_preds.copy(), ctdpheno_dir, doi)[3]
+        print(f"Threshold for calling disease of interest / positive class (optimal by maximizing Youden's J): {threshold}")
     else:
         threshold = thresholds[0]
-    # Get the unique values in the 'Truth' column
-    truths = ctdpheno_preds['Truth'].unique()
-    ctdpheno_preds.to_csv(direct + 'ctdPheno_class-predictions.tsv', sep="\t")
-    plot_range = [min(ctdpheno_preds[doi]), max(ctdpheno_preds[doi])]
-    # Loop over the unique values in the 'Truth' column
-    for truth in truths:
-        # Subset the data based on the 'Truth' column
-        subset = ctdpheno_preds[ctdpheno_preds['Truth'] == truth]
-        # Call plot_ctdpheno for the subset of the data
-        plot_ctdpheno(subset, direct, doi, threshold, label=truth, plot_range=plot_range)
+        print(f"Threshold for calling disease of interest / positive class (provided): {threshold}")
+    plot_ctdpheno(ctdpheno_preds, ctdpheno_dir, doi, threshold)
 
-    # run Keraon
-    print("### Running experiment: mixture estimation (Keraon)")
-    direct = 'results/Keraon/'
+    # run Keraon and plot results
+    print("\n### Running experiment: mixture estimation (Keraon)")
     keraon_preds = keraon(df_train, df_test)
+    keraon_preds = keraon_preds.sort_values(['TFX'], ascending=False)
     if truth_vals is not None:
         keraon_preds = pd.merge(truth_vals, keraon_preds, left_index=True, right_index=True)
-    if ordering is not None:
-        keraon_preds = keraon_preds.reindex(ordering)
-    elif truth_vals is not None:
-        keraon_preds = keraon_preds.sort_values(['Truth', 'TFX'], ascending=[True, False])
     else:
-        keraon_preds = keraon_preds.sort_values(['TFX'], ascending=False)
-    keraon_preds.to_csv(direct + 'Keraon_mixture-predictions.tsv', sep="\t")
-    # keraon_preds = keraon_preds[keraon_preds['FS_Region'] == 'Contra-Simplex']
-    keraon_preds = keraon_preds[~keraon_preds.index.str.contains('CRPC')]
+        keraon_preds['Truth'] = 'Unknown'
+    keraon_preds.to_csv(keraon_dir + 'Keraon_mixture-predictions.tsv', sep="\t")
     if not (keraon_preds['Truth'] == 'Unknown').all():
-        threshold = plot_roc(keraon_preds[keraon_preds['Truth'] != 'MIX'], direct, doi + '_fraction')[3]
+        threshold = plot_roc(keraon_preds.copy(), keraon_dir, doi + '_fraction')[3]
+        print(f"Threshold for calling disease of interest / positive class (optimal by maximizing Youden's J): {threshold}")
     else:
         threshold = thresholds[1]
-    # Get the unique values in the 'Truth' column
-    truths = keraon_preds['Truth'].unique()
-    # Loop over the unique values in the 'Truth' column
-    for truth in truths:
-        # Subset the data based on the 'Truth' column
-        subset = keraon_preds[keraon_preds['Truth'] == truth]
-        # Call plot_ctdpheno for the subset of the data
-        plot_keraon(subset, direct, doi + '_fraction', threshold, label=truth, palette=palette)
-        # N.B. please remove truth values which are heterogenous mixtures (e.g. MIX) for a proper ROC, as seen below
+        print(f"Threshold for calling disease of interest / positive class (provided): {threshold}")
+    plot_keraon(keraon_preds, keraon_dir, doi + '_fraction', threshold, palette=palette)
+
     print('Now exiting.')
 
 

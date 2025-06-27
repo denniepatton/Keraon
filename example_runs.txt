@@ -1,0 +1,13 @@
+### ATAC-Seq sites based runs using pre-determined features: 
+
+# To run on ATAC WGS for UW-Cohort (reference data) - optimized thresholds = (0.322, 0.026)
+python Keraon.py -r /fh/fast/ha_g/user/rpatton/LuCaP_data/Triton_ATAC/results/TritonCompositeFM.tsv /fh/fast/ha_g/user/rpatton/HD_data/Triton_ATAC/results/TritonCompositeFM.tsv /fh/fast/ha_g/user/rpatton/HDL_data/Triton_ATAC/results/TritonCompositeFM.tsv -k config/reference_key_example.tsv -i /fh/fast/ha_g/user/rpatton/UW-WGS_data/Triton_ATAC/results/TritonCompositeFM.tsv -t config/tfx_example.tsv -d NEPC -p config/palette_example.tsv -f config/site_features_example.txt
+
+# To run on ATAC WGS for UW-Cohort (pre-computed basis)
+python Keraon.py -r bases/HD-LuCaP_ATAC_reference_simplex.pickle -k config/reference_key_example.tsv -i /fh/fast/ha_g/user/rpatton/UW-WGS_data/Triton_ATAC/results/TritonCompositeFM.tsv -t config/tfx_example.tsv -d NEPC -p config/palette_example.tsv -f config/site_features_example.txt
+
+# To run on ATAC ULP for UW-Cohort (reference data) - optimized thresholds = (0.546, 0.030)
+python Keraon.py -r /fh/fast/ha_g/user/rpatton/LuCaP_data/Triton_ATAC/results/TritonCompositeFM.tsv /fh/fast/ha_g/user/rpatton/HD_data/Triton_ATAC/results/TritonCompositeFM.tsv /fh/fast/ha_g/user/rpatton/HDL_data/Triton_ATAC/results/TritonCompositeFM.tsv -k config/reference_key_example.tsv -i /fh/fast/ha_g/user/rpatton/UW-ULP_data/Triton_ATAC/results/TritonCompositeFM.tsv -t config/tfx_example.tsv -d NEPC -p config/palette_example.tsv -f config/site_features_example.txt
+
+# To run on ATAC ULP for UW-Cohort (pre-computed basis)
+python Keraon.py -r bases/HD-LuCaP_ATAC_reference_simplex.pickle -k config/reference_key_example.tsv -i /fh/fast/ha_g/user/rpatton/UW-ULP_data/Triton_ATAC/results/TritonCompositeFM.tsv -t config/tfx_example.tsv -d NEPC -p config/palette_example.tsv -f config/site_features_example.txt
