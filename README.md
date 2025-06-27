@@ -96,80 +96,69 @@ Keraon can be run on the command line using the following arguments (examples of
 
 ### Contained Scripts:
 
-**Keraon.py** | primary script containing both classification and mixture estimation methods
-**utils/keraon_utils.py** | contains utility functions called by Keraon.py for loading and processing data
-**utils/keraon_helpers.py** | contains helper functions called by Keraon.py for ctdpheno and keraon methods
-**utils/keraon_plotters.py** | combines helper functions for plotting outputs of Keraon.py
+**Keraon.py** | primary script containing both classification and mixture estimation methods  
+**utils/keraon_utils.py** | contains utility functions called by Keraon.py for loading and processing data  
+**utils/keraon_helpers.py** | contains helper functions called by Keraon.py for ctdpheno and keraon methods  
+**utils/keraon_plotters.py** | combines helper functions for plotting outputs of Keraon.py  
 
 ### Methodology
 
-#### Simplex Volume Calculation
+---
 
-Given $n$ classes (or subtypes), each represented by a mean vector in a high-dimensional feature space, the volume $V$ of the simplex formed by these vectors can be calculated recursively using the heights and bases of lower-dimensional simplexes.
+### Pre‑processing and Robust Scaling
 
-For a set of $n+1$ vectors ($\mathbf{v}_0, \mathbf{v}_1, \ldots, \mathbf{v}_n$), the volume $V$ of the simplex can be calculated as:
+The raw feature matrix **X****raw**** ∈ ℝ\*\*\*\*n×d** undergoes a robust transformation per feature, across sites, implemented in `load_triton_fm()`.
 
-$V = \frac{1}{n} \times \text{Base} \times \text{Height}$
+| symbol | definition                                |
+| ------ | ----------------------------------------- |
+| μᴴ\_f  | median of *Healthy* anchors for feature *f* |
+| IQR\_f | inter‑quartile range of feature *f*       |
+| ε      | 10⁻¹², numerical floor                    |
 
-where:
-- The Base is the volume of the $(n-1)$-dimensional simplex formed by the first $n$ vectors.
-- The Height is the perpendicular distance from the $n$-th vector to the base simplex.
+The transformed value is
 
-Mathematically, if $V_{n-1}$ is the volume of the $(n-1)$-dimensional simplex, and $\mathbf{v}_0, \mathbf{v}_1, \ldots, \mathbf{v}_{n-1}$ are the vectors forming the base simplex, then the height $H$ is given by:
+> x̃ₛ,f = ( xₛ,f − μᴴ\_f ) ⁄ ( IQR\_f + ε ).
 
-$H = \frac{|\mathbf{v}_n - \mathbf{v}_0|}{n}$
+Optional per‑feature point transforms (e.g. log₁₀) are applied *before* centering/scaling.  All parameters {μᴴ, IQR} are written to the reference `reference_simplex.pickle` and reused on test data.
 
-Thus, the volume $V$ of the $n$-dimensional simplex is:
+---
 
-$V = \frac{1}{n} \times V_{n-1} \times \frac{|\mathbf{v}_n - \mathbf{v}_0|}{n}$
+#### Simplex Volume Maximization (SVM) for feature selection (beta, optional)
 
-#### Objective Function
+This process chooses a set of features which maximize the distances amongst healthy and tumor centroids in some N-dimensional space, by maximizing the volume of the simplex with vertices defined by those centroids.
+As Keraon uses an orthonormalized version of the reference simplex defined in the same way to calculate tumor burdens, this method aims to improve those estimates when many features are available.
+For any candidate mask of features α (a Boolean vector of length *d* features) the objective is
 
-The objective function to be maximized is the volume of the simplex formed by the mean vectors of the classes, weighted by a penalty factor to account for irregularity and a scaling factor to ensure positive semi-definiteness of covariance matrices. The objective function can be expressed as:
+  Obj(α) = V × S × ρ,
 
-$\text{Objective} = \frac{V}{\text{Penalty} \times \text{Scale Factor}}$
+where
 
-#### Penalty Calculation
+- V – simplex volume of the class mean vectors in the masked space
+- S – *scale factor* coupling edge length to within‑class scatter
+- ρ – *regulatory term* enforcing shape regularity
 
-The penalty is introduced to penalize irregular simplices (i.e., those that are not equilateral). It is calculated as the ratio of the maximum to the minimum pairwise distance between the mean vectors. Given the mean vectors $\mathbf{v}_i$ and $\mathbf{v}_j$:
+| quantity                    | formula / description                                       |
+| --------------------------- | ----------------------------------------------------------- |
+| **V**                       | Cayley–Menger volume of the masked centroid                 |
+| Edge set                    | All pairwise Euclidean distances between centroids          |
+| Harmonic mean of edges *H*̅  | len(E) ⁄ Σ (1 ⁄ d) , with guard if any d < 10⁻⁹             |
+| Regulatory term **ρ**       | min(E) ⁄ max(E) (range ∈ 0…1)                               |
+| Scatter per class           | √Σ diag(Σᵢ[α])                                              |
+| Mean scatter μₛ              | arithmetic mean over classes (∞ if any Σᵢ ill‑conditioned)  |
+| Scale factor **S**          | H̅ ⁄ ( μₛ + 10⁻⁹ )^(3⁄2)                                      |
 
-$\text{Penalty} = \frac{\max(|\mathbf{v}_i - \mathbf{v}_j|)}{\min(|\mathbf{v}_i - \mathbf{v}_j|)}$
+If any guard condition fails (volume≈0, non‑PSD, H̅≈0, μₛ→∞) the objective returns 0, preventing that mask from being chosen.
 
-where $|\mathbf{v}_i - \mathbf{v}_j|$ denotes the Euclidean distance between pairs of mean vectors.
+The MSV greedy loop iteratively flips the single feature bit that yields the largest positive ΔObj, stopping when ΔObj < 10⁻⁴.
 
-#### Scale Factor Calculation
+### Greedy Maximization Algorithm
 
-The scale factor is used to ensure that the covariance matrices of the selected features are positive semi-definite and to down-weight simplices that have large variances along edges. It is calculated based on the standard deviations of the projected data onto the edges of the simplex. For each edge $\mathbf{e}_{ij}$ formed by the mean vectors, the variance of the projected data is computed. The scale factor is the sum of the products of these variances:
+1. **Initial mask** – one feature per tumour subtype based on Mann–Whitney‑U seperation from other classes
+2. **Iteration** – add the single unused feature that yields the greatest increase in Obj.
+3. **Stopping** – stop when relative Obj gain < 10⁻⁴ or when a user‑defined cap is reached
+4. **Output** – the final mask α∗ is written to disk and consumed unchanged by *ctdPheno* and *Keraon*
 
-1. **Edge Calculation:** For each pair of mean vectors $\mathbf{v}_i$ and $\mathbf{v}_j$, compute the edge:
-
-$\mathbf{e}_{ij} = \mathbf{v}_i - \mathbf{v}_j$
-
-2. **Projection and Variance Calculation:** Project the data onto each edge and compute the variance. For a given edge $\mathbf{e}_{ij}$, the projection of the data matrix $\mathbf{X}$ is:
-
-$\text{Proj}(\mathbf{X}, \mathbf{e}_{ij}) = \mathbf{X} \cdot \mathbf{e}_{ij}$
-
-The variance of the projections is:
-
-$\text{Var}(\text{Proj}(\mathbf{X}, \mathbf{e}_{ij}))$
-
-3. **Vertex Standard Deviation Volumes:** Calculate the "volume" of the standard deviations at each vertex. For each vertex $\mathbf{v}_i$, the product of the variances of the edges connected to it is computed:
-
-$\text{Vertex StDev Volume}_i = \prod_{\mathbf{e}_{ij}} \text{Var}(\text{Proj}(\mathbf{X}, \mathbf{e}_{ij}))$
-
-4. **Scale Factor:** The total scale factor is the sum of the vertex standard deviation volumes:
-
-$\text{Scale Factor} = \sum_{i} \text{Vertex StDev Volume}_i$
-
-#### Greedy Maximization Algorithm
-
-The greedy maximization algorithm is used to iteratively select features that maximize the objective function. Starting with an empty set of features, the algorithm evaluates all possible feature combinations, selects the base combination that maximizes the objective function, and iteratively adds features until no further improvements can be made.
-
-1. **Initialization:** Start with an empty feature mask and initialize the best value to negative infinity.
-2. **Combinatorial Search:** Evaluate all possible masks with a minimal number of features set to 1. This is done to establish an initial subset of features.
-3. **Greedy Search:** Iteratively add features that maximize the objective function until no further improvements can be made.
-
-The final result is a subset of features that maximizes the simplex volume while maintaining a balance between feature space complexity and discriminative power.
+---
 
 ### Classification ("ctdPheno")
 
@@ -190,45 +179,25 @@ The log of the likelihood (log likelihood) is:
 
 $\log \mathcal{L}(\mathbf{x} \mid \mu, \Sigma) = -\frac{1}{2} \left[ (\mathbf{x} - \mu)^T \Sigma^{-1} (\mathbf{x} - \mu) + \log |\Sigma| + k \log (2\pi) \right]$
 
-#### Mixture Model
-
-For a given sample $\mathbf{x}$ with tumor fraction TFX, the mean vector of the class mixtures $\mu_{\text{mixture}}$ are calculated as:
+For a given sample $\mathbf{x}$ with tumor fraction TFX, the mean vectors of the class mixtures $\mu_{\text{mixture}}$ are calculated as:
 
 $\mu_{\text{mixture}} = \text{TFX} \cdot \mu_{\text{subtype}} + (1 - \text{TFX}) \cdot \mu_{\text{healthy}}$
-
-The covariance matrix of the mixture $\Sigma_{\text{mixture}}$ is simplified as an identity matrix by default:
-
-$\Sigma_{\text{mixture}} = I$
-
-This is done to account for large disparities in sample size between anchor classes. The log likelihood for each subtype $i$ is:
-
-$\log \mathcal{L}_i = -\frac{1}{2} \left[ (\mathbf{x} - \mu_{\text{mixture}, i})^T I^{-1} (\mathbf{x} - \mu_{\text{mixture}, i}) + \log |I| + k \log (2\pi) \right]$
-
-Since $\Sigma_{\text{mixture}} = I$ and $\log |I| = 0$, this simplifies to:
-
-$\log \mathcal{L}_i = -\frac{1}{2} \left[ (\mathbf{x} - \mu_{\text{mixture}, i})^T (\mathbf{x} - \mu_{\text{mixture}, i}) + k \log (2\pi) \right]$
-
-#### Optimizing TFX
-
-If the initial log likelihoods are not real, the function automatically optimizes the TFX to maximize the total log likelihood. This is achieved by directly searching over a range of TFX values and selecting the one that maximizes the likelihood:
-
-$\text{TFX}_{\text{optimal}} = \arg \max_{\text{TFX}} \sum_{i=1}^{n} \log \mathcal{L}(\mathbf{x}_i \mid \mu_{\text{mixture}}, \Sigma_{\text{mixture}})$
 
 #### Weights and Predictions
 
 The function calculates the weights/scores for each subtype using the softmax function applied to the log likelihoods:
 
-$w_i = \frac{e^{\log \mathcal{L}_i}}{\sum_{j} e^{\log \mathcal{L}_j}}$
+$\w_i = \frac{e^{\log \mathcal{L}_i}}{\sum_{j} e^{\log \mathcal{L}_j}}$
 
 where $w_i$ is the weight for subtype $i$.
 
 Barring validation in an additional dataset using an identical reference set of anchors to determine an optimal scoring threshold, the prediction for each sample is the subtype with the highest weight.
 
+---
+
 ### Mixture Estimation ("Keraon")
 
-The `keraon` function transforms the feature space of a dataset into a new basis defined by
-
- the mean vectors of different subtypes across the selected features, creating a simplex meant to encompass the space connecting healthy, also from the reference, to the subtypes of interest. This transformation enables the calculation of the component fraction of each subtype in a sample's feature vector and thus the "burden" of each subtype, which is the product of the sample's tumor fraction (TFX) and its fraction of the subtype.
+The `keraon` function transforms the feature space of a dataset into a new basis defined by the mean vectors of different subtypes across the selected features, creating a simplex meant to encompass the space connecting healthy, also from the reference, to the subtypes of interest. This transformation enables the direct, geometric calculation of the component fraction of each subtype in a sample's feature vector and thus the "burden" of each subtype.
 
 #### Basis Vector Calculation
 
@@ -238,17 +207,19 @@ $\mu_i = \frac{1}{n_i} \sum_{j=1}^{n_i} \mathbf{x}_j^{(i)}$
 
 where $n_i$ is the number of samples in subtype $i$, and $\mathbf{x}_j^{(i)}$ is the $j$-th sample of subtype $i$.
 
-2. **Directional Vectors:** Subtract the mean vector of the 'Healthy' subtype $\mu_{\text{Healthy}}$ from the mean vectors of the other subtypes to get directional vectors from healthy to each subtype:
+2. **Directional Vectors:** The 'Healthy' subtype  vector $\mu_{\text{Healthy}}$ is subtracted from the mean vectors of the other subtypes to get directional vectors from healthy to each subtype:
 
 $\mathbf{v}_i = \mu_i - \mu_{\text{Healthy}}$
 
-3. **Orthogonal Basis Vectors:** Apply the Gram-Schmidt process to the directional vectors $\mathbf{v}_i$ to obtain an orthogonal basis, with healthy at the origin and each axis defining a direction along a subtype:
+3. **Orthogonal Basis Vectors:** The Gram-Schmidt process is applied to the directional vectors $\mathbf{v}_i$ to obtain an orthogonal basis, with healthy at the origin and each axis defining a direction along a subtype:
 
 $\mathbf{u}_i = \frac{\mathbf{v}_i - \sum_{j=1}^{i-1} \left( \frac{\mathbf{v}_i \cdot \mathbf{u}_j}{\mathbf{u}_j \cdot \mathbf{u}_j} \right) \mathbf{u}_j}{\left| \mathbf{v}_i - \sum_{j=1}^{i-1} \left( \frac{\mathbf{v}_i \cdot \mathbf{u}_j}{\mathbf{u}_j \cdot \mathbf{u}_j} \right) \mathbf{u}_j \right|}$
 
+The healthy vertex is then extended equally away from the tumor vertices by the maximum negative displacement amongst healthy reference samples, ensuring all healthy references are enclosed by the simplex.
+
 #### Sample Transformation
 
-1. **Transform to New Basis:** For each sample vector $\mathbf{x}$, transform the vector to the new basis by subtracting $\mu_{\text{Healthy}}$ and projecting onto the orthogonal basis:
+For each sample vector $\mathbf{x}$, the sample is trandformed into the new basis by subtracting $\mu_{\text{Healthy}}$ and projecting onto the orthogonal basis:
 
 $\mathbf{y} = \mathbf{x} - \mu_{\text{Healthy}}$
 
@@ -256,23 +227,9 @@ $\mathbf{p} = \mathbf{y} \cdot \mathbf{U}^T$
 
 where $\mathbf{U}$ is the matrix of orthogonal basis vectors.
 
-2. **Regions of the Feature Space:** Determine the region of the feature space based on the transformed sample vector $\mathbf{p}$:
-
-- **Simplex:** All components of $\mathbf{p}$ are positive.
-- **Contra-Simplex:** All components of $\mathbf{p}$ are negative.
-- **Outer-Simplex:** Mixed positive and negative components.
-
-3. **Adjust for Contra/Outer-Simplex:** If the sample vector is in the contra-simplex region, negate the vector and scale it to match the TFX (this method is not well validated, so please watch out for samples falling in the contra-simplex space):
-
-$\mathbf{p} = -\mathbf{p}$
-
-$\mathbf{p} = \left( \frac{\mathbf{p}}{|\mathbf{p}|} \right) \cdot \text{TFX}$
-
-If the sample vector has some, but not all, negative components, those are zeroed out on the assumption that they do not imply any fraction of that subtype.
-
 #### Fraction and Burden Calculation
 
-1. **Projected and Orthogonal Lengths:** Calculate the projected length $|\mathbf{p}|$ of the vector that lies in the feature space defined by the simplex, and the orthogonal length $|\mathbf{d}|$ of the vector that completes the sample vector along an axis orthogonal to the feature space:
+The projected length $|\mathbf{p}|$ of the vector that lies in the feature space defined by the simplex, and the orthogonal length $|\mathbf{d}|$ of the vector that completes the sample vector along an axis orthogonal to the feature space are then calculated:
 
 $|\mathbf{p}| = \sqrt{\sum_{i=1}^{k} p_i^2}$
 
@@ -280,39 +237,33 @@ $|\mathbf{d}| = \sqrt{\sum_{i=1}^{k} d_i^2}$
 
 where $\mathbf{d}$ is the difference vector between the original vector and its projection.
 
-2. **Component Fractions:** Normalize the projected and orthogonal components to get the fraction of each subtype and off-target fraction:
+These components are then scaled by the provided tumor fraction to get the total fraction of each subtype, including off-target from the orthogonal component:
 
 $\text{comp\_fraction}_i = \frac{p_i}{|\mathbf{p}|} \quad \text{for each } i$
 
 $\text{off\_target\_fraction} = \frac{|\mathbf{d}|}{|\mathbf{p}| + |\mathbf{d}|}$
 
-3. **Subtype Burdens:** Calculate the burden of each subtype as the product of TFX and the fraction of the subtype:
-
-$\text{burden}_i = \text{TFX} \cdot \text{comp\_fraction}_i$
-
-4. **Normalize Fractions:** Ensure the sum of fractions is 1:
-
-$\text{comp\_fraction} = \frac{\text{comp\_fraction}}{\sum \text{comp\_fraction}}$
+---
 
 ## Requirements
 
 Keraon uses mostly standard library imports like NumPy and SciPy and has been tested on Python 3.9 and 3.10.
 To create a tested environment using the provided `keraon_requirements.yml` file, follow these steps:
 
-1. **Install Micromambaa**: Ensure you have Micromamba installed. You can download and install it following the instructions on the [official website](https://mamba.readthedocs.io/en/latest/installation/micromamba-installation.html).
+1. **Install Micromamba**: Ensure you have Micromamba installed. You can download and install it following the instructions on the [official website](https://mamba.readthedocs.io/en/latest/installation/micromamba-installation.html).
 
 2. **Download the `keraon_requirements.yml` File**: Make sure the file is in your current working directory.
 
 3. **Create the Environment**: Use the following command to create a new Micromamba environment named `keraon` using the dependencies specified in the `keraon_requirements.yml` file:
 
     ```bash
-    micromamba create -f keraon-requirements.yml
+    micromamba create -f keraon_requirements.yml
     ```
 
 4. **Activate the Environment**: Once the environment is created, activate it using:
 
     ```bash
-    conda activate keraon
+    micromamba activate keraon
     ```
 
 5. **Verify the Installation**: To ensure all packages are installed correctly, you can list the packages in the environment using:
@@ -322,7 +273,7 @@ To create a tested environment using the provided `keraon_requirements.yml` file
     ```
 
 ## Contact
-If you have any questions or feedback, please contact me at:  
+If you have any questions or feedback, please contact me here on GitHub or at:  
 **Email:** <rpatton@fredhutch.org>
 
 ## Acknowledgments
