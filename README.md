@@ -189,7 +189,7 @@ Covariance matrices are calculated similarly, shifting components based on the p
 
 The function calculates the weights/scores for each subtype using the softmax function applied to the log likelihoods:
 
-$\w_i = \frac{e^{\log \mathcal{L}_i}}{\sum_{j} e^{\log \mathcal{L}_j}}$
+$w_i = \frac{e^{\log \mathcal{L}_i}}{\sum_{j} e^{\log \mathcal{L}_j}}$
 
 where $w_i$ is the weight for subtype $i$.
 
@@ -211,11 +211,12 @@ where $n_i$ is the number of samples in subtype $i$, and $\mathbf{x}_j^{(i)}$ is
 
 2. **Directional Vectors:** The 'Healthy' subtype  vector $\mu_{\text{Healthy}}$ is subtracted from the mean vectors of the other subtypes to get directional vectors from healthy to each subtype:
 
-$\mathbf{v}_i = \mu_i - \mu_{\text{Healthy}}$
+$\vec{v}_i = \mu_i - \mu_{\text{Healthy}}$
 
 3. **Orthogonal Basis Vectors:** The Gram-Schmidt process is applied to the directional vectors $\mathbf{v}_i$ to obtain an orthogonal basis, with healthy at the origin and each axis defining a direction along a subtype:
 
-$\mathbf{u}_i = \frac{\mathbf{v}_i - \sum_{j=1}^{i-1} \left( \frac{\mathbf{v}_i \cdot \mathbf{u}_j}{\mathbf{u}_j \cdot \mathbf{u}_j} \right) \mathbf{u}_j}{\left| \mathbf{v}_i - \sum_{j=1}^{i-1} \left( \frac{\mathbf{v}_i \cdot \mathbf{u}_j}{\mathbf{u}_j \cdot \mathbf{u}_j} \right) \mathbf{u}_j \right|}$
+$$u_i = \frac{v_i - \sum_{j=1}^{i-1} \left( \frac{v_i \cdot u_j}{u_j \cdot u_j} \right) u_j}
+{\left| v_i - \sum_{j=1}^{i-1} \left( \frac{v_i \cdot u_j}{u_j \cdot u_j} \right) u_j \right|}$$
 
 The healthy vertex is then extended equally away from the tumor vertices by the maximum negative displacement amongst healthy reference samples, ensuring all healthy references are enclosed by the simplex.
 
