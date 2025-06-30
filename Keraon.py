@@ -232,8 +232,18 @@ def ctdpheno(ref_df, df):
 def main():
     parser = argparse.ArgumentParser(description='\n### Keraon.py ###')
 
-    # Required arguments
+    def parse_thresholds(value):
+        """Parse comma-separated thresholds into a tuple of floats"""
+        try:
+            values = [float(x.strip()) for x in value.split(',')]
+            if len(values) != 2:
+                raise ValueError("Expected exactly two threshold values")
+            return tuple(values)
+        except ValueError as e:
+            raise argparse.ArgumentTypeError(f"Invalid threshold format: {e}")
 
+
+    # Required arguments
     parser.add_argument('-r', '--reference_data', nargs='*', required=True, 
                         help="""Either a single, pre-generated reference_simplex.pickle file or one or more tidy-form, .tsv feature matrices (in which case a reference key must also be passed with -k).
                         Tidy files will be used to generate a basis and should contain 4 columns: "sample", "site", "feature", and "value".""")
@@ -249,7 +259,7 @@ def main():
     # Optional arguments
     parser.add_argument('-d', '--doi', default=None, 
                         help='Disease/subtype of interest (positive case) for plotting and calculating ROCs. Must be present in key.')
-    parser.add_argument('-x', '--thresholds', default=(0.322, 0.025), 
+    parser.add_argument('-x', '--thresholds', type=parse_thresholds, default=(0.322, 0.025), 
                         help='Thresholds for calling disease of interest / positive class (ctdPheno, Keraon).')
     parser.add_argument('-f', '--features', default=None, 
                         help='File with a list of site_feature combinations to restrict to. Sites and features should be separated by an underscore.')
