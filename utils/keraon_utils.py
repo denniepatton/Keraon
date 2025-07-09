@@ -12,6 +12,7 @@ import seaborn as sns
 from typing import Union, List, Dict, Tuple
 
 
+
 def load_reference_key(key_path):
     try:
         with open(key_path, 'r') as f:
@@ -253,7 +254,7 @@ def load_palette(palette_path: str, ref_labels: pd.DataFrame = None) -> dict:
         print("Warning: No reference labels provided. Palette will not be validated against subtypes.")
         all_ref_subtypes = set()
     else:
-        print(f"Reference labels provided. Palette will be validated against {len(ref_labels)} subtypes.")
+        print(f"Reference labels provided. Palette will be validated against {len(ref_labels.Subtype.value_counts().shape[0])} subtypes.")
         all_ref_subtypes = set(ref_labels['Subtype'].unique())
 
     if palette_path is None:
@@ -601,7 +602,6 @@ def load_triton_fm(fm_path: Union[str, List[str]],
     df['site'] = df['site'].str.replace('_', '-')
     df['feature'] = df['feature'].str.replace('_', '-')
     df['cols'] = df['site'].astype(str) + '_' + df['feature']
-    
     if df.duplicated(subset=['sample', 'cols']).any():
         num_duplicates = df.duplicated(subset=['sample', 'cols']).sum()
         print(f"Warning: Found {num_duplicates} duplicate 'sample'-'cols' combinations. Aggregating by mean.")
