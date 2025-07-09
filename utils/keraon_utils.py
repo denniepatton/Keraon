@@ -78,14 +78,15 @@ def load_reference_key(key_path):
         for subtype, count in subtype_counts.items():
             print(f"- {subtype}: {count}")
 
-    subtypes_to_drop = subtype_counts[subtype_counts < 3].index.tolist()
+    min_subtypes_needed = 2
+    subtypes_to_drop = subtype_counts[subtype_counts < min_subtypes_needed].index.tolist()
     
     if subtypes_to_drop:
-        print("\nFiltering subtypes with fewer than 3 examples:")
+        print(f"\nFiltering subtypes with fewer than {min_subtypes_needed} examples:")
         samples_dropped_details = []
         for subtype in subtypes_to_drop:
             count = subtype_counts[subtype]
-            print(f"Subtype '{subtype}' has {count} examples, which is less than the 3 minimum. Samples for this subtype will be dropped.")
+            print(f"Subtype '{subtype}' has {count} examples, which is less than the {min_subtypes_needed} minimum. Samples for this subtype will be dropped.")
             samples_for_subtype = ref_labels[ref_labels['Subtype'] == subtype].index.tolist()
             for sample_id in samples_for_subtype:
                 samples_dropped_details.append(f"Sample '{sample_id}' (Subtype: {subtype})")
