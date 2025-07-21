@@ -254,7 +254,7 @@ def load_palette(palette_path: str, ref_labels: pd.DataFrame = None) -> dict:
         print("Warning: No reference labels provided. Palette will not be validated against subtypes.")
         all_ref_subtypes = set()
     else:
-        print(f"Reference labels provided. Palette will be validated against {len(ref_labels.Subtype.value_counts().shape[0])} subtypes.")
+        print(f"Reference labels provided. Palette will be validated against {ref_labels.Subtype.value_counts().shape[0]} subtypes.")
         all_ref_subtypes = set(ref_labels['Subtype'].unique())
 
     if palette_path is None:
@@ -473,7 +473,6 @@ def load_triton_fm(fm_path: Union[str, List[str]],
 
     if not all_dfs: print("Error: No data loaded. Exiting."); exit(1)
     df = pd.concat(all_dfs, ignore_index=True)
-
     # Restrict to specific features if limit_features is provided
     if limit_features:
         print(f"\nApplying feature limiting based on `limit_features` list: {limit_features}")
@@ -485,7 +484,6 @@ def load_triton_fm(fm_path: Union[str, List[str]],
     if len(df) < initial_row_count:
         print(f"Dropped {initial_row_count - len(df)} rows with NaN values in essential columns (sample, site, feature, value).")
     if df.empty: print("Error: DataFrame empty after NaN drop. Exiting."); exit(1)
-
 
     # 2. Apply Initial Scaling (scaling_methods)
     print("\nApplying initial/default feature-level scaling_methods...")
