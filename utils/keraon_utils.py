@@ -426,7 +426,9 @@ def load_triton_fm(fm_path: Union[str, List[str]],
                    ref_labels: pd.DataFrame = None, 
                    plot_distributions: bool = True,
                    limit_features: list = None,
-                   feature_scaling_params: Dict = None) -> Tuple[pd.DataFrame, Union[Dict, None]]:
+                   #feature_scaling_params: Dict = None,
+                   min_dict: Dict = None,
+                   range_dict: Dict = None) -> Tuple[pd.DataFrame, Tuple[Dict, Dict]]: #Tuple[pd.DataFrame, Union[Dict, None]]:
     """
     Loads Triton feature matrix(es), applies initial scaling, optionally calculates/applies
     feature-wise scaling, plots distributions, and returns a pivoted DataFrame
@@ -503,6 +505,7 @@ def load_triton_fm(fm_path: Union[str, List[str]],
     os.makedirs(overall_plot_subdir, exist_ok=True)
 
     # 3. Feature-wise Scaling
+    """
     print("\nApplying robust centering (site-specific Healthy medians) and feature-level robust scaling ...")
 
     scaling_params = {}
@@ -558,6 +561,7 @@ def load_triton_fm(fm_path: Union[str, List[str]],
         
         print("Test run: Applied provided robust centering and feature-level scaling.")
         params_to_return = None
+    """
 
     # 4. Filter Samples based on ref_labels (if provided, AFTER all scaling)
     if ref_labels is not None:
@@ -608,5 +612,28 @@ def load_triton_fm(fm_path: Union[str, List[str]],
         df_pivoted = df.pivot_table(index='sample', columns='cols', values='value')
     
     print(f"Pivoting complete. Resulting DataFrame shape: {df_pivoted.shape}")
+
+    
+    """
+    Standardize the features in a dataframe by min/max scaling.
+    """
+    # If no min/range dictionaries are supplied, calculate them
+    print('Standardizing features by min/max . . .')
+    if min_dict is None or range_dict is None:
+        min_dict, range_dict = {}, {}
+        for column in df_pivoted.columns:
+            if column == 'Subtype':
+                continue
+            min_dict[column] = np.nanmin(df_pivoted[column].values)
+            range_dict[column] = np.nanmax(df_pivoted[column].values) - min_dict[column]
+
+    # Standardize the features in the dataframe
+    for column in df_pivoted.columns:
+        if column != 'Subtype' and column in min_dict:
+            df_pivoted.loc[:, column] -= min_dict[column]
+            df_pivoted.loc[:, column] /= range_dict[column]
+    
+    params_to_return = min_dict, range_dict
+
     return df_pivoted, params_to_return
 
