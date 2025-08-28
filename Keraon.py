@@ -17,8 +17,8 @@ from utils.keraon_plotters import *
 # These Triton features are liable to depth bias / outliers or are intended for larger regions (e.g. gene bodies, not TFBS sites)
 drop_features = ['mean-depth', 'fragment-diversity', 'fragment-entropy', 'var-ratio', # highly biased by (or are measurements of) depth
                  'central-loc', 'plus-one-pos', 'minus-one-pos', 'plus-minus-ratio']  # based on peak-calling, which may struggle with low-coverage regions
-limit_features = ['central-depth', 'central-diversity']
-# limit_features = None
+#limit_features = ['central-depth', 'central-diversity']
+limit_features = None
 
 # feature-specific scaling to make normal-like (applies to Triton features only)
 scaling_methods = {'fragment-diversity': lambda x: np.log(x+10e-6),
@@ -52,6 +52,8 @@ def keraon(ref_df, df):
     DataFrame: A dataframe containing the TFX, fraction and burden of each subtype for each sample, 
                and the region of the feature space where the sample is located.
     """
+    #Sort ref_df - permutation on rows can lead to inconsistent Gram-Schmidt basis
+    ref_df = ref_df.sort_index()
     # Get initial reference values
     features = list(ref_df.iloc[:, 1:].columns)  # for ordering
     subtypes = list(ref_df['Subtype'].unique())
@@ -88,6 +90,7 @@ def keraon(ref_df, df):
     basis = raw_basis
 
     # Shift the 'Healthy' center/origin to ensure all healthy reference samples are within the simplex
+    
     min_coeff = 0.0
     for idx in ref_df.index[ref_df['Subtype'] == 'Healthy']:
         y = (ref_df.loc[idx, features].values - mean_vectors[hd_idx])
@@ -361,6 +364,7 @@ def main():
         if perform_svm and not load_features:
             plot_pca(pd.merge(ref_labels, ref_df, left_index=True, right_index=True), processing_dir, palette, "PCA_initial")
             df_train = pd.merge(ref_labels['Subtype'], ref_df, left_index=True, right_index=True)
+            df_train_all_features = df_train.copy()
             df_train = maximal_simplex_volume(df_train)
             df_train = pd.merge(ref_labels['Subtype'], df_train, left_index=True, right_index=True)
             plot_pca(df_train, processing_dir, palette, "PCA_post-SVM")
@@ -378,6 +382,7 @@ def main():
                 exit(1)
             ref_df = ref_df[features_to_keep]
             df_train = pd.merge(ref_labels['Subtype'], ref_df, left_index=True, right_index=True)
+            df_train_all_features = df_train.copy()
             plot_pca(df_train, processing_dir, palette, "PCA_pre-selected_features")
             print('Finished. Saving reference dataframe . . .')
             df_train.to_csv(processing_dir + 'pre-selected_site_features.tsv', sep="\t")
@@ -392,7 +397,7 @@ def main():
 
     # Load test data
     print(f"\nLoading test data from: {input_path}")
-    test_df, _ = load_triton_fm(input_path, scaling_methods, processing_dir, palette, feature_scaling_params=scaling_params, plot_distributions=True)
+    test_df, _ = load_triton_fm(input_path, scaling_methods, processing_dir, palette, min_dict=scaling_params[0], range_dict=scaling_params[1], plot_distributions=True)
     # Define the required features from the training data
     required_features = df_train.drop('Subtype', axis=1).columns
     # Check for missing features in test_df
@@ -405,22 +410,27 @@ def main():
     if not common_features:
         print("Error: No common features found between the test data and the required features from the training data. Exiting.")
         exit(1)
+    test_df_all_features = test_df.copy()
+    test_df_all_features = test_df_all_features[df_train_all_features.drop('Subtype', axis=1).columns]
     test_df = test_df[common_features]
     df_test = pd.merge(test_labels, test_df, left_index=True, right_index=True, how='inner')
+    df_test_all_features = pd.merge(test_labels, test_df_all_features, left_index=True, right_index=True, how='inner')
     if df_test.empty:
         print("Warning: After merging test labels and test data (and aligning features), the resulting df_test is empty.")
         print("This might be due to no common sample IDs between test_labels and test_df after feature alignment, or no common features. Exiting.")
         exit(1) 
-
     if truth_vals is not None:
+        plot_pca(df_train_all_features, processing_dir, palette, "PCA_initial_wTestSamples", post_df=pd.merge(truth_vals, df_test_all_features, left_index=True, right_index=True))
         plot_pca(df_train, processing_dir, palette, "PCA_final-basis_wTestSamples", post_df=pd.merge(truth_vals, df_test, left_index=True, right_index=True))
     else:
+        plot_pca(df_train_all_features, processing_dir, palette, "PCA_final-basis_wTestSamples", post_df=df_test_all_features)
         plot_pca(df_train, processing_dir, palette, "PCA_final-basis_wTestSamples", post_df=df_test)
 
     # Print complete feature distributions for selected site_features, showing the test samples against the reference
     plot_combined_feature_distributions(df_train, df_test, processing_dir + 'feature_distributions/final-basis_site-features', palette)
 
     # run ctdPheno and plot results
+    """
     print("\n### Running experiment: classification (ctdPheno)")
     ctdpheno_preds = ctdpheno(df_train, df_test)
     ctdpheno_preds = ctdpheno_preds.sort_values(['TFX'], ascending=False)
@@ -436,6 +446,7 @@ def main():
         threshold = thresholds[0]
         print(f"Threshold for calling disease of interest / positive class (provided): {threshold}")
     plot_ctdpheno(ctdpheno_preds, ctdpheno_dir, doi, threshold)
+    """
 
     # run Keraon and plot results
     print("\n### Running experiment: mixture estimation (Keraon)")

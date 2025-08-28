@@ -12,6 +12,7 @@ import seaborn as sns
 from typing import Union, List, Dict, Tuple
 
 
+
 def load_reference_key(key_path):
     try:
         with open(key_path, 'r') as f:
@@ -78,14 +79,15 @@ def load_reference_key(key_path):
         for subtype, count in subtype_counts.items():
             print(f"- {subtype}: {count}")
 
-    subtypes_to_drop = subtype_counts[subtype_counts < 3].index.tolist()
+    min_subtypes_needed = 2
+    subtypes_to_drop = subtype_counts[subtype_counts < min_subtypes_needed].index.tolist()
     
     if subtypes_to_drop:
-        print("\nFiltering subtypes with fewer than 3 examples:")
+        print(f"\nFiltering subtypes with fewer than {min_subtypes_needed} examples:")
         samples_dropped_details = []
         for subtype in subtypes_to_drop:
             count = subtype_counts[subtype]
-            print(f"Subtype '{subtype}' has {count} examples, which is less than the 3 minimum. Samples for this subtype will be dropped.")
+            print(f"Subtype '{subtype}' has {count} examples, which is less than the {min_subtypes_needed} minimum. Samples for this subtype will be dropped.")
             samples_for_subtype = ref_labels[ref_labels['Subtype'] == subtype].index.tolist()
             for sample_id in samples_for_subtype:
                 samples_dropped_details.append(f"Sample '{sample_id}' (Subtype: {subtype})")
@@ -252,7 +254,7 @@ def load_palette(palette_path: str, ref_labels: pd.DataFrame = None) -> dict:
         print("Warning: No reference labels provided. Palette will not be validated against subtypes.")
         all_ref_subtypes = set()
     else:
-        print(f"Reference labels provided. Palette will be validated against {len(ref_labels)} subtypes.")
+        print(f"Reference labels provided. Palette will be validated against {ref_labels.Subtype.value_counts().shape[0]} subtypes.")
         all_ref_subtypes = set(ref_labels['Subtype'].unique())
 
     if palette_path is None:
@@ -424,7 +426,9 @@ def load_triton_fm(fm_path: Union[str, List[str]],
                    ref_labels: pd.DataFrame = None, 
                    plot_distributions: bool = True,
                    limit_features: list = None,
-                   feature_scaling_params: Dict = None) -> Tuple[pd.DataFrame, Union[Dict, None]]:
+                   #feature_scaling_params: Dict = None,
+                   min_dict: Dict = None,
+                   range_dict: Dict = None) -> Tuple[pd.DataFrame, Tuple[Dict, Dict]]: #Tuple[pd.DataFrame, Union[Dict, None]]:
     """
     Loads Triton feature matrix(es), applies initial scaling, optionally calculates/applies
     feature-wise scaling, plots distributions, and returns a pivoted DataFrame
@@ -471,7 +475,6 @@ def load_triton_fm(fm_path: Union[str, List[str]],
 
     if not all_dfs: print("Error: No data loaded. Exiting."); exit(1)
     df = pd.concat(all_dfs, ignore_index=True)
-
     # Restrict to specific features if limit_features is provided
     if limit_features:
         print(f"\nApplying feature limiting based on `limit_features` list: {limit_features}")
@@ -483,7 +486,6 @@ def load_triton_fm(fm_path: Union[str, List[str]],
     if len(df) < initial_row_count:
         print(f"Dropped {initial_row_count - len(df)} rows with NaN values in essential columns (sample, site, feature, value).")
     if df.empty: print("Error: DataFrame empty after NaN drop. Exiting."); exit(1)
-
 
     # 2. Apply Initial Scaling (scaling_methods)
     print("\nApplying initial/default feature-level scaling_methods...")
@@ -503,6 +505,7 @@ def load_triton_fm(fm_path: Union[str, List[str]],
     os.makedirs(overall_plot_subdir, exist_ok=True)
 
     # 3. Feature-wise Scaling
+    """
     print("\nApplying robust centering (site-specific Healthy medians) and feature-level robust scaling ...")
 
     scaling_params = {}
@@ -558,6 +561,7 @@ def load_triton_fm(fm_path: Union[str, List[str]],
         
         print("Test run: Applied provided robust centering and feature-level scaling.")
         params_to_return = None
+    """
 
     # 4. Filter Samples based on ref_labels (if provided, AFTER all scaling)
     if ref_labels is not None:
@@ -600,7 +604,6 @@ def load_triton_fm(fm_path: Union[str, List[str]],
     df['site'] = df['site'].str.replace('_', '-')
     df['feature'] = df['feature'].str.replace('_', '-')
     df['cols'] = df['site'].astype(str) + '_' + df['feature']
-    
     if df.duplicated(subset=['sample', 'cols']).any():
         num_duplicates = df.duplicated(subset=['sample', 'cols']).sum()
         print(f"Warning: Found {num_duplicates} duplicate 'sample'-'cols' combinations. Aggregating by mean.")
@@ -609,5 +612,28 @@ def load_triton_fm(fm_path: Union[str, List[str]],
         df_pivoted = df.pivot_table(index='sample', columns='cols', values='value')
     
     print(f"Pivoting complete. Resulting DataFrame shape: {df_pivoted.shape}")
+
+    
+    """
+    Standardize the features in a dataframe by min/max scaling.
+    """
+    # If no min/range dictionaries are supplied, calculate them
+    print('Standardizing features by min/max . . .')
+    if min_dict is None or range_dict is None:
+        min_dict, range_dict = {}, {}
+        for column in df_pivoted.columns:
+            if column == 'Subtype':
+                continue
+            min_dict[column] = np.nanmin(df_pivoted[column].values)
+            range_dict[column] = np.nanmax(df_pivoted[column].values) - min_dict[column]
+
+    # Standardize the features in the dataframe
+    for column in df_pivoted.columns:
+        if column != 'Subtype' and column in min_dict:
+            df_pivoted.loc[:, column] -= min_dict[column]
+            df_pivoted.loc[:, column] /= range_dict[column]
+    
+    params_to_return = min_dict, range_dict
+
     return df_pivoted, params_to_return
 
