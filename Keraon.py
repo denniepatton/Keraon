@@ -364,6 +364,7 @@ def main():
         if perform_svm and not load_features:
             plot_pca(pd.merge(ref_labels, ref_df, left_index=True, right_index=True), processing_dir, palette, "PCA_initial")
             df_train = pd.merge(ref_labels['Subtype'], ref_df, left_index=True, right_index=True)
+            df_train_all_features = df_train.copy()
             df_train = maximal_simplex_volume(df_train)
             df_train = pd.merge(ref_labels['Subtype'], df_train, left_index=True, right_index=True)
             plot_pca(df_train, processing_dir, palette, "PCA_post-SVM")
@@ -381,6 +382,7 @@ def main():
                 exit(1)
             ref_df = ref_df[features_to_keep]
             df_train = pd.merge(ref_labels['Subtype'], ref_df, left_index=True, right_index=True)
+            df_train_all_features = df_train.copy()
             plot_pca(df_train, processing_dir, palette, "PCA_pre-selected_features")
             print('Finished. Saving reference dataframe . . .')
             df_train.to_csv(processing_dir + 'pre-selected_site_features.tsv', sep="\t")
@@ -408,15 +410,20 @@ def main():
     if not common_features:
         print("Error: No common features found between the test data and the required features from the training data. Exiting.")
         exit(1)
+    test_df_all_features = test_df.copy()
+    test_df_all_features = test_df_all_features[df_train_all_features.drop('Subtype', axis=1).columns]
     test_df = test_df[common_features]
     df_test = pd.merge(test_labels, test_df, left_index=True, right_index=True, how='inner')
+    df_test_all_features = pd.merge(test_labels, test_df_all_features, left_index=True, right_index=True, how='inner')
     if df_test.empty:
         print("Warning: After merging test labels and test data (and aligning features), the resulting df_test is empty.")
         print("This might be due to no common sample IDs between test_labels and test_df after feature alignment, or no common features. Exiting.")
         exit(1) 
     if truth_vals is not None:
+        plot_pca(df_train_all_features, processing_dir, palette, "PCA_initial_wTestSamples", post_df=pd.merge(truth_vals, df_test_all_features, left_index=True, right_index=True))
         plot_pca(df_train, processing_dir, palette, "PCA_final-basis_wTestSamples", post_df=pd.merge(truth_vals, df_test, left_index=True, right_index=True))
     else:
+        plot_pca(df_train_all_features, processing_dir, palette, "PCA_final-basis_wTestSamples", post_df=df_test_all_features)
         plot_pca(df_train, processing_dir, palette, "PCA_final-basis_wTestSamples", post_df=df_test)
 
     # Print complete feature distributions for selected site_features, showing the test samples against the reference
