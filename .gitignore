@@ -1,11 +1,9 @@
 # Local results (keep locally, do not share)
-results/
+results/**
+.vscode
 
 # Internal run history (not for public sharing)
 FHCC_EXAMPLE_RUNS.md
-
-# Reference Triton README (temporary style reference)
-Triton_README.md
 
 .DS_Store
 
