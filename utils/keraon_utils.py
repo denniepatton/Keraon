@@ -2,8 +2,8 @@
 # Robert Patton, rpatton@fredhutch.org
 # v0.1, 5/7/2025
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 import os
 import re
 import random
@@ -485,13 +485,16 @@ def load_triton_fm(fm_path: Union[str, List[str]],
     if df.empty: print("Error: DataFrame empty after NaN drop. Exiting."); exit(1)
 
 
-    # 2. Apply Initial Scaling (scaling_methods)
+    # 2. Apply Initial Scaling (scaling_methods) — vectorized per feature type
     print("\nApplying initial/default feature-level scaling_methods...")
     scaled_features_applied_count = 0
     for feature_name_in_dict, scaling_func in scaling_methods.items():
         mask = df['feature'] == feature_name_in_dict
         if mask.any():
-            df.loc[mask, 'value'] = df.loc[mask, 'value'].apply(scaling_func)
+            vals = df.loc[mask, 'value'].to_numpy(dtype=float)
+            valid = np.isfinite(vals)
+            vals[valid] = np.log1p(np.maximum(vals[valid], 0.0))  # safe_log1p vectorized
+            df.loc[mask, 'value'] = vals
             print(f" - Initial scaling for '{feature_name_in_dict}' applied to {mask.sum()} rows.")
             scaled_features_applied_count += 1
     if scaled_features_applied_count == 0: print("No initial scaling_methods applied (no matching features or empty dict).")
@@ -502,66 +505,9 @@ def load_triton_fm(fm_path: Union[str, List[str]],
     overall_plot_subdir = os.path.join(output_dir_for_plots, "feature_distributions", plot_base_dir_name)
     os.makedirs(overall_plot_subdir, exist_ok=True)
 
-    # 3. Feature-wise Scaling
-    print("\nApplying robust centering (site-specific Healthy medians) and feature-level robust scaling ...")
-
-    scaling_params = {}
-
-    if ref_labels is not None:  # Reference Run: Calculate and apply scaling
-        # Identify healthy samples (assumes 'Healthy' is in ref_labels['Subtype'], case-insensitive)
-        healthy_samples = ref_labels[ref_labels['Subtype'].str.lower() == 'healthy'].index
-        # Compute, for each (site, feature) combination, the median value among healthy samples
-        healthy_centers = df[df['sample'].isin(healthy_samples)].groupby(['site', 'feature'])['value'].median()
-        scaling_params['centers'] = healthy_centers.to_dict()
-        
-        # Subtract the healthy center from every row for its (site, feature)
-        def apply_center(row):
-            key_tuple = (row['site'], row['feature'])
-            center = healthy_centers.get(key_tuple, 0)  # if missing, assume 0
-            return row['value'] - center
-        df['centered_value'] = df.apply(apply_center, axis=1)
-        
-        # Compute feature-level robust scaling factors using the IQR of the centered values (across all sites)
-        robust_scales = df.groupby('feature')['centered_value'].agg(lambda x: x.quantile(0.75) - x.quantile(0.25))
-        # Avoid division by zero: if IQR is 0, default to 1
-        robust_scales = robust_scales.replace(0, 1)
-        scaling_params['scale_factors'] = robust_scales.to_dict()
-        
-        # Apply scaling for each row
-        def apply_scaling(row):
-            scale = scaling_params['scale_factors'].get(row['feature'], 1)
-            return row['centered_value'] / scale
-        df['scaled_value'] = df.apply(apply_scaling, axis=1)
-        df['value'] = df['scaled_value']
-        
-        print("Reference run: Robust centering and feature-level scaling applied.")
-        params_to_return = scaling_params
-
-    else:  # Test Run: Apply provided scaling parameters
-        if feature_scaling_params is None:
-            print("Error: Running in test mode but no scaling parameters provided. Exiting.")
-            exit(1)
-        
-        scaling_params = feature_scaling_params  # Expected to contain keys 'centers' and 'scale_factors'
-        
-        def apply_center_test(row):
-            key_tuple = (row['site'], row['feature'])
-            center = scaling_params.get('centers', {}).get(key_tuple, 0)
-            return row['value'] - center
-        df['centered_value'] = df.apply(apply_center_test, axis=1)
-        
-        def apply_scaling_test(row):
-            scale = scaling_params.get('scale_factors', {}).get(row['feature'], 1)
-            return row['centered_value'] / scale
-        df['scaled_value'] = df.apply(apply_scaling_test, axis=1)
-        df['value'] = df['scaled_value']
-        
-        print("Test run: Applied provided robust centering and feature-level scaling.")
-        params_to_return = None
-
-    # 4. Filter Samples based on ref_labels (if provided, AFTER all scaling)
+    # 3. Filter Samples based on ref_labels (BEFORE computing scaling parameters)
     if ref_labels is not None:
-        print("\nFiltering feature matrix samples based on reference labels (post-scaling)...")
+        print("\nFiltering feature matrix samples based on reference labels (BEFORE computing scaling)...")
         ref_sample_ids = set(ref_labels.index)
         fm_sample_ids_before_filter = set(df['sample'].unique())
         missing_ref_samples_in_fm = ref_sample_ids - fm_sample_ids_before_filter
@@ -580,6 +526,62 @@ def load_triton_fm(fm_path: Union[str, List[str]],
             print("No samples dropped from FM based on ref_labels (all FM samples relevant).")
         if df.empty: print("Error: FM empty after filtering with ref_labels. Exiting."); exit(1)
         print(f"FM now contains {len(fm_sample_ids_after_filter)} samples matching ref_labels.")
+
+    # 4. Feature-wise Standardization (mean/std), derived from reference and applied identically to test.
+    print("\nApplying feature-wise standardization (mean/std) ...")
+
+    scaling_params = {}
+    eps = 1e-8
+
+    if ref_labels is not None:
+        # Compute mean/std for each (site, feature) across the reference samples
+        mu = df.groupby(["site", "feature"])["value"].mean()
+        sd = df.groupby(["site", "feature"])["value"].std(ddof=0)
+        sd = sd.fillna(0.0)
+        sd = sd.where(sd > eps, 1.0)
+
+        scaling_params["standardize_mean"] = mu.to_dict()
+        scaling_params["standardize_std"] = sd.to_dict()
+
+        # Vectorized standardization via merge instead of row-wise apply
+        mu_df = mu.reset_index().rename(columns={"value": "_mu"})
+        sd_df = sd.reset_index().rename(columns={"value": "_sd"})
+        df = df.merge(mu_df, on=["site", "feature"], how="left")
+        df = df.merge(sd_df, on=["site", "feature"], how="left")
+        df["_mu"] = df["_mu"].fillna(0.0)
+        df["_sd"] = df["_sd"].fillna(1.0)
+        df["value"] = (df["value"] - df["_mu"]) / df["_sd"]
+        df.drop(columns=["_mu", "_sd"], inplace=True)
+
+        params_to_return = scaling_params
+        print("Reference run: standardization parameters calculated.")
+    else:
+        if feature_scaling_params is None:
+            print("Error: Running in test mode but no scaling parameters provided. Exiting.")
+            exit(1)
+
+        scaling_params = feature_scaling_params
+        if "standardize_mean" not in scaling_params or "standardize_std" not in scaling_params:
+            print("Error: scaling parameters missing standardization keys. Exiting.")
+            exit(1)
+
+        # Vectorized standardization via merge instead of row-wise apply
+        mu_map = scaling_params.get("standardize_mean", {})
+        sd_map = scaling_params.get("standardize_std", {})
+        mu_df = pd.DataFrame([(s, f, v) for (s, f), v in mu_map.items()],
+                             columns=["site", "feature", "_mu"])
+        sd_df = pd.DataFrame([(s, f, v) for (s, f), v in sd_map.items()],
+                             columns=["site", "feature", "_sd"])
+        df = df.merge(mu_df, on=["site", "feature"], how="left")
+        df = df.merge(sd_df, on=["site", "feature"], how="left")
+        df["_mu"] = df["_mu"].fillna(0.0)
+        df["_sd"] = df["_sd"].fillna(1.0)
+        df.loc[df["_sd"] <= 0, "_sd"] = 1.0
+        df["value"] = (df["value"] - df["_mu"]) / df["_sd"]
+        df.drop(columns=["_mu", "_sd"], inplace=True)
+
+        params_to_return = None
+        print("Test run: standardization applied using reference parameters.")
 
     # Plot after feature-wise scaling
     if plot_distributions:

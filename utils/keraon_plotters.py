@@ -7,16 +7,23 @@ This module contains plotting functions for final predictions from Keraon.
 """
 
 import os
+from typing import Mapping, Sequence
+
 import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 from matplotlib.colors import TwoSlopeNorm, LinearSegmentedColormap
-from sklearn import metrics
 from sklearn.decomposition import PCA
 import warnings # ignore warnings, e.g. matplotlib deprecation warnings
 
-def plot_pca(df: pd.DataFrame, direct: str, palette: dict, name: str, post_df=None) -> None:
+def plot_pca(
+    df: pd.DataFrame,
+    direct: str,
+    palette: Mapping[str, str] | None,
+    name: str,
+    post_df: pd.DataFrame | None = None,
+) -> None:
     """
     Plot first three (1-2, 2-3) principal components.
 
@@ -36,12 +43,20 @@ def plot_pca(df: pd.DataFrame, direct: str, palette: dict, name: str, post_df=No
     if df_data.shape[1] < 3:  
         print(f'PCA requires at least three features - exiting ({name})')
         return
-    df_data = df_data.to_numpy()
+    df_data_np = df_data.to_numpy()
+
+    # Track which columns are NaN-free so we use the same mask for transform
+    valid_col_mask = ~np.isnan(df_data_np).any(axis=0)
+    df_data_clean = df_data_np[:, valid_col_mask]
+
+    if df_data_clean.shape[1] < 3:
+        print(f'PCA requires at least three non-NaN features - exiting ({name})')
+        return
     
     # Perform PCA
-    n_components = min(df_data.shape[1], 3)
+    n_components = min(df_data_clean.shape[1], 3)
     pca = PCA(n_components=n_components)
-    principalComponents = pca.fit_transform(df_data[:, ~np.isnan(df_data).any(axis=0)])
+    principalComponents = pca.fit_transform(df_data_clean)
     
     # Create a new dataframe with the PCA results
     pca_df = pd.DataFrame(data=principalComponents, columns=[f'PC{i+1}' for i in range(n_components)], index=df.index)
@@ -54,7 +69,7 @@ def plot_pca(df: pd.DataFrame, direct: str, palette: dict, name: str, post_df=No
     _, axs = plt.subplots(min(2, n_components), 1, figsize=(10, 20))
 
     sns.scatterplot(x="PC1", y="PC2", data=pca_df, palette=palette, ax=axs[0], hue='Subtype', legend=True, s=200, alpha=0.8)
-    axs[0].set_title(f'{name} ({df_data.shape[1]} total features)', size=14, y=1.02)
+    axs[0].set_title(f'{name} ({df_data_clean.shape[1]} total features)', size=14, y=1.02)
     axs[0].set_xlabel(f'PC1: {round(100 * explained_var[0], 2)}%')
     axs[0].set_ylabel(f'PC2: {round(100 * explained_var[1], 2)}%')
 
@@ -65,23 +80,35 @@ def plot_pca(df: pd.DataFrame, direct: str, palette: dict, name: str, post_df=No
 
     if post_df is not None:
         post_data = post_df.drop(columns=[col for col in ['TFX', 'Truth'] if col in post_df.columns]).to_numpy()
-        sampleComponents = pca.transform(post_data)
-        sample_df = pd.DataFrame(data=sampleComponents, columns=['PC1', 'PC2', 'PC3'], index=post_df.index)
+        # Use the same column mask as the PCA fit and impute any remaining NaNs with 0
+        post_data_clean = post_data[:, valid_col_mask]
+        post_data_clean = np.where(np.isfinite(post_data_clean), post_data_clean, 0.0)
+        sampleComponents = pca.transform(post_data_clean)
+        sample_df = pd.DataFrame(data=sampleComponents, columns=[f'PC{i+1}' for i in range(sampleComponents.shape[1])], index=post_df.index)
         sample_df['TFX'] = post_df['TFX']
         if 'Truth' in post_df.columns:
             sample_df['Truth'] = post_df['Truth']
             sns.scatterplot(x="PC1", y="PC2", data=sample_df, palette=palette, ax=axs[0], legend=True, alpha=0.8, hue="Truth", size="TFX")
-            sns.scatterplot(x="PC2", y="PC3", data=sample_df, palette=palette, ax=axs[1], legend=True, alpha=0.8, hue="Truth", size="TFX")
+            if n_components > 2:
+                sns.scatterplot(x="PC2", y="PC3", data=sample_df, palette=palette, ax=axs[1], legend=True, alpha=0.8, hue="Truth", size="TFX")
         else:
             sns.scatterplot(x="PC1", y="PC2", data=sample_df, palette=palette, ax=axs[0], legend=True, alpha=0.8, color='black', size="TFX")
-            sns.scatterplot(x="PC2", y="PC3", data=sample_df, palette=palette, ax=axs[1], legend=True, alpha=0.8, color='black', size="TFX")
+            if n_components > 2:
+                sns.scatterplot(x="PC2", y="PC3", data=sample_df, palette=palette, ax=axs[1], legend=True, alpha=0.8, color='black', size="TFX")
 
     axs[0].legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
-    axs[1].legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
+    if n_components > 2:
+        axs[1].legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
     plt.savefig(f'{direct}{name}.pdf', bbox_inches="tight")
 
 
-def plot_ctdpheno(predictions: pd.DataFrame, direct: str, key: str, threshold: float, plot_range=[0, 1]) -> None:
+def plot_ctdpheno(
+    predictions: pd.DataFrame,
+    direct: str,
+    key: str,
+    threshold: float | None,
+    plot_range: Sequence[float] = (0.0, 1.0),
+) -> None:
     """
     Plot stick and ball plot of prediction (relative log likelihood) for each subtype.
     
@@ -92,22 +119,24 @@ def plot_ctdpheno(predictions: pd.DataFrame, direct: str, key: str, threshold: f
        threshold (float): The threshold to use for binary classification.
        plot_range (list): The range of values to plot. Default is [0, 1].
     """
-    # Calculate accuracy based on Truth column
-    def calculate_accuracy(group_df, key, threshold):
-        if 'Truth' not in group_df.columns or all(truth.lower() == "unknown" for truth in group_df['Truth']):
+    # Calculate accuracy based on Truth column (optional)
+    def calculate_accuracy(group_df: pd.DataFrame, truth_label: str, score_col: str, threshold: float | None) -> str:
+        if threshold is None or "Truth" not in group_df.columns:
+            return "NA"
+        if all(str(truth).lower() == "unknown" for truth in group_df["Truth"]):
             return "NA"
         
-        # Check if key is in Truth values (allowing for CSV format)
+        # Check if truth_label is in Truth values (allowing for CSV format)
         contains_key = []
         for truth in group_df['Truth']:
             # Split by comma and check if key is in any of the parts
             truth_parts = [part.strip() for part in str(truth).split(',')]
-            contains_key.append(key in truth_parts)
+            contains_key.append(truth_label in truth_parts)
         
         # Calculate accuracy
         correct_predictions = 0
         for idx, contains in enumerate(contains_key):
-            score = group_df.iloc[idx][key]
+            score = group_df.iloc[idx][score_col]
             if contains and score >= threshold:  # True positive
                 correct_predictions += 1
             elif not contains and score < threshold:  # True negative
@@ -115,6 +144,11 @@ def plot_ctdpheno(predictions: pd.DataFrame, direct: str, key: str, threshold: f
                 
         return f"{100 * correct_predictions / len(group_df):.2f}%" if len(group_df) > 0 else "NA"
     
+    # Determine label name for Truth matching from score column name.
+    truth_label = str(key)
+    if truth_label.startswith("post_"):
+        truth_label = truth_label[len("post_") :]
+
     # Group by Truth and order by group size (descending)
     if 'Truth' in predictions.columns:
         truth_groups = predictions.groupby('Truth')
@@ -140,7 +174,8 @@ def plot_ctdpheno(predictions: pd.DataFrame, direct: str, key: str, threshold: f
     
     # Create custom color gradient from gray to red with mix at threshold
     cmap = LinearSegmentedColormap.from_list("GrayToRed", ["dimgray", "darkred"])
-    norm = TwoSlopeNorm(vmin=plot_range[0], vcenter=threshold, vmax=plot_range[1])
+    threshold_for_plot = float(threshold) if threshold is not None else 0.5
+    norm = TwoSlopeNorm(vmin=float(plot_range[0]), vcenter=threshold_for_plot, vmax=float(plot_range[1]))
     
     # Process each Truth group
     for idx, (ax, truth_val) in enumerate(zip(axs, ordered_truths)):
@@ -148,24 +183,24 @@ def plot_ctdpheno(predictions: pd.DataFrame, direct: str, key: str, threshold: f
         group_df = predictions[predictions['Truth'] == truth_val]
         
         # Calculate accuracy for this group
-        acc_text = calculate_accuracy(group_df, key, threshold)
+        acc_text = calculate_accuracy(group_df, truth_label, key, threshold)
         
         # Create x positions for bars
         x_positions = np.arange(len(group_df))
         y_values = group_df[key].values
         
         # Make bars start at threshold and go up/down
-        bar_heights = y_values - threshold
+        bar_heights = y_values - threshold_for_plot
         colors = [cmap(norm(val)) for val in y_values]
         
         # Plot bars
-        bars = ax.bar(x_positions, bar_heights, width=0.2, bottom=threshold, color=colors)
+        ax.bar(x_positions, bar_heights, width=0.2, bottom=threshold_for_plot, color=colors)
         
         # Plot scatter points at the values - larger and without outlines
         ax.scatter(x_positions, y_values, s=150, color=colors, zorder=3, edgecolor=None)
         
         # Add horizontal threshold line
-        ax.axhline(y=threshold, color='black', linestyle='--', lw=1)
+        ax.axhline(y=threshold_for_plot, color='black', linestyle='--', lw=1)
         
         # Set y-axis limits
         ax.set_ylim(plot_range)
@@ -200,32 +235,61 @@ def plot_ctdpheno(predictions: pd.DataFrame, direct: str, key: str, threshold: f
     # Create the colorbar with matching vertical alignment
     cbar_ax = fig.add_axes([0.96, bottom, 0.02, height])
     cbar = fig.colorbar(sm, cax=cbar_ax)
-    cbar.set_ticks([0.0, threshold, 1.0])
-    cbar.set_ticklabels(['0.0', f'{threshold:.2f}', '1.0'])
+    cbar.set_ticks([float(plot_range[0]), threshold_for_plot, float(plot_range[1])])
+    cbar.set_ticklabels([f"{float(plot_range[0]):.2f}", f"{threshold_for_plot:.2f}", f"{float(plot_range[1]):.2f}"])
 
     # Add a figure-level title
     fig.suptitle(f"{key} Classification Scores", fontsize=16, y=1.02)
 
     # Don't call tight_layout again after positioning the colorbar
-    plt.savefig(direct + 'ctdPheno_class-predictions.pdf', bbox_inches="tight")
+    plt.savefig(os.path.join(direct, 'ctdPheno_class-predictions.pdf'), bbox_inches="tight")
     plt.close()
 
 
-def plot_keraon(predictions: pd.DataFrame, direct: str, key: str, threshold: float, palette=None) -> None:
+def plot_keraon(
+    predictions: pd.DataFrame,
+    direct: str,
+    key: str,
+    threshold: float | None,
+    palette: Mapping[str, str] | None = None,
+) -> None:
     """
-    Plot stacked bar plots as subplots arranged horizontally where each subplot’s width
-    is proportional to its number of samples. Within each subplot the samples are sorted by
-    the "TFX" column (high to low). The leftmost subplot title shows the label "Truth:" 
-    and "Accuracy:" along with its computed values, while the remaining subplots simply show
-    the truth value and accuracy.
+    Plot stacked bar plots in 2 rows with N columns (where N = number of test subtype groups).
+    
+    Top row (2/3 height): Total fraction bar plots (scaled 0-1, includes Healthy component).
+    Bottom row (1/3 height): Tumor burden bar plots (scaled 0-1, non-healthy components only).
+    
+    Each subplot's width is proportional to its number of samples. Samples are sorted by
+    TFX (high to low) and aligned vertically between rows. The leftmost subplot title shows 
+    "Truth:" and "Accuracy:" along with computed values, while remaining subplots show the 
+    truth value and accuracy.
     
     A figure-level title is added that reads, for example:
-       "Mixture estimates (NEPC presence based on NEPC_fraction thresholding)"
+       "Mixture estimates (positive label based on <score> thresholding)"
     """
+
+    def truth_contains(truth: str, label: str) -> bool:
+        parts = [p.strip() for p in str(truth).split(',') if p.strip()]
+        return any(p == label for p in parts)
+
+    def _infer_positive_label_from_key(score_key: str) -> str:
+        k = str(score_key)
+        for suffix in ('_fraction', '_burden'):
+            if k.endswith(suffix):
+                return k[: -len(suffix)]
+        return k
     # Group by Truth and order by group size (descending)
-    truth_groups = predictions.groupby('Truth')
-    group_sizes_series = truth_groups.size().sort_values(ascending=False)
-    ordered_truths = group_sizes_series.index.tolist()
+    # If Truth is missing (common in inference), treat all samples as one group.
+    if "Truth" in predictions.columns:
+        truth_groups = predictions.groupby('Truth')
+        group_sizes_series = truth_groups.size().sort_values(ascending=False)
+        ordered_truths = group_sizes_series.index.tolist()
+    else:
+        predictions = predictions.copy()
+        predictions["Truth"] = "All"
+        truth_groups = predictions.groupby('Truth')
+        group_sizes_series = truth_groups.size().sort_values(ascending=False)
+        ordered_truths = group_sizes_series.index.tolist()
     
     # Determine each group's sample count and width ratios for the subplots
     width_ratios = [group_sizes_series.loc[t] for t in ordered_truths]
@@ -235,39 +299,51 @@ def plot_keraon(predictions: pd.DataFrame, direct: str, key: str, threshold: flo
     total_width = sum(width_ratios) * bar_width + 1  # add some extra margin
     
     n_groups = len(ordered_truths)
-    # Create subplots in one row with variable widths according to width_ratios.
-    fig, axs = plt.subplots(1, n_groups, figsize=(total_width, 6), gridspec_kw={'width_ratios': width_ratios})
-    if n_groups == 1:
-        axs = [axs]
+    # Create subplots in 2 rows with variable widths according to width_ratios.
+    # Top row (fraction): 3 units, Bottom row (burden): 1 unit (1/3 of top row)
+    fig, axs = plt.subplots(2, n_groups, figsize=(total_width, 5), 
+                            gridspec_kw={'width_ratios': width_ratios, 'height_ratios': [3, 1]})
     
-    for idx, (ax, truth_val) in enumerate(zip(axs, ordered_truths)):
+    # Handle case where n_groups == 1 (axs would be 1D instead of 2D)
+    if n_groups == 1:
+        axs = axs.reshape(2, 1)
+    
+    for idx, truth_val in enumerate(ordered_truths):
         # Subset group and order samples by TFX descending
         group_df = predictions[predictions['Truth'] == truth_val].sort_values(by="TFX", ascending=False)
         n_samples = group_df.shape[0]
         
-        # Compute accuracy if truth is not "Unknown"
-        if truth_val.lower() != "unknown":
-            subkey = key.lower().replace('_fraction', '')
-            if subkey in truth_val.lower():
-                # If the Truth label includes NEPC, patients with NEPC_fraction > threshold are correct.
-                correct = (group_df[key] > threshold)
-            else:
-                # If Truth does NOT include NEPC, any patient with NEPC_fraction > threshold is incorrect.
-                correct = (group_df[key] <= threshold)
+        # Compute accuracy if Truth is present and we have a threshold
+        if threshold is not None and truth_val.lower() != "unknown":
+            positive_label = _infer_positive_label_from_key(key)
+            is_pos = group_df["Truth"].apply(lambda x: truth_contains(x, positive_label))
+            correct = np.where(
+                is_pos.to_numpy(dtype=bool),
+                (group_df[key] > threshold),
+                (group_df[key] <= threshold),
+            )
             acc = correct.mean() * 100
             acc_text = f"{acc:.2f}%"
         else:
             acc_text = "NA"
         
-        # Prepare the data for the stacked bar plot:
-        subset = group_df.filter(like='_fraction')
+        # === TOP ROW: Total Fraction (includes Healthy) ===
+        ax_top = axs[0, idx]
+        
+        # Prepare the data for the stacked bar plot (total fractions)
+        subset_fraction = group_df.filter(like='_fraction')
+        # Exclude QC diagnostic columns that are not cfDNA fraction components
+        subset_fraction = subset_fraction.drop(
+            columns=[c for c in subset_fraction.columns if 'residual_perp' in c],
+            errors='ignore',
+        )
         # If the key column is missing, try key + '_fraction'
-        if key not in subset.columns:
+        if key not in subset_fraction.columns:
             potential_key = f"{key}_fraction"
-            if potential_key in subset.columns:
+            if potential_key in subset_fraction.columns:
                 key = potential_key
         
-        cols = subset.columns.tolist()
+        cols = subset_fraction.columns.tolist()
         if 'Healthy_fraction' in cols:
             cols.remove('Healthy_fraction')
         if key in cols:
@@ -275,40 +351,115 @@ def plot_keraon(predictions: pd.DataFrame, direct: str, key: str, threshold: flo
         new_cols = [key] + cols
         if 'Healthy_fraction' in group_df.columns:
             new_cols = new_cols + ['Healthy_fraction']
-        subset = subset[new_cols]
+        subset_fraction = subset_fraction[new_cols]
         
-        # Plot the stacked bar plot.
+        # Plot the stacked bar plot for total fractions
         if palette is not None:
             pal = {f"{k}_fraction": v for k, v in palette.items()}
             pal["Healthy_fraction"] = "#D3D3D3"
-            subset.plot(kind='bar', stacked=True, color=pal, width=0.90, legend=False, ax=ax)
+
+            cycle_colors = plt.rcParams.get("axes.prop_cycle", None)
+            cycle_colors = (cycle_colors.by_key().get("color", []) if cycle_colors is not None else [])
+            cycle_idx = 0
+            colors = []
+            for col in subset_fraction.columns:
+                if col in pal:
+                    colors.append(pal[col])
+                elif "residual" in str(col).lower():
+                    colors.append("#7F7F7F")
+                elif cycle_colors:
+                    colors.append(cycle_colors[cycle_idx % len(cycle_colors)])
+                    cycle_idx += 1
+                else:
+                    colors.append("#1F77B4")
+
+            subset_fraction.plot(kind='bar', stacked=True, color=colors, width=0.90, legend=False, ax=ax_top)
         else:
-            subset.plot(kind='bar', stacked=True, width=0.90, legend=False, ax=ax)
+            subset_fraction.plot(kind='bar', stacked=True, width=0.90, legend=False, ax=ax_top)
         
-        # Only the leftmost subplot gets the y-axis label; hide it for the rest.
+        # Only the leftmost subplot gets the y-axis label
         if idx == 0:
-            ax.set_ylabel('total fraction')
+            ax_top.set_ylabel('cfDNA fraction', fontsize=12)
         else:
-            ax.set_ylabel('')
-            ax.tick_params(labelleft=False)
-        ax.axhline(y=threshold, color='black', linestyle='dashed')
-        ax.set_ylim(0, 1)
-        # Set x-axis width based on the number of samples in the group.
-        ax.set_xlim(-0.5, n_samples - 0.5)
+            ax_top.set_ylabel('')
+            ax_top.tick_params(labelleft=False)
+        if threshold is not None:
+            ax_top.axhline(y=threshold, color='black', linestyle='dashed', linewidth=1)
+        ax_top.set_ylim(0, 1)
+        ax_top.set_xlim(-0.5, n_samples - 0.5)
+        
+        # Remove x-axis labels and ticks from top row (will share with bottom row)
+        ax_top.set_xlabel('')
+        ax_top.tick_params(labelbottom=False)
         
         # Only the leftmost gets full labeling
         if idx == 0:
-            ax.set_title(f"Truth: {truth_val}\nAccuracy: {acc_text}", fontsize=14)
+            ax_top.set_title(f"Truth: {truth_val}\nAccuracy: {acc_text}", fontsize=14)
         else:
-            ax.set_title(f"{truth_val}\n{acc_text}", fontsize=14)
+            ax_top.set_title(f"{truth_val}\n{acc_text}", fontsize=14)
+        
+        # === BOTTOM ROW: Tumor Burden (non-healthy components, normalized to sum to 1) ===
+        ax_bottom = axs[1, idx]
+        
+        # Prepare the data for tumor burden (exclude Healthy_fraction, use _burden columns)
+        subset_burden = group_df.filter(like='_burden')
+        
+        # Order columns to match the top row (excluding Healthy)
+        burden_cols = subset_burden.columns.tolist()
+        # Reorder to put key first if it exists
+        key_burden = key.replace('_fraction', '_burden')
+        if key_burden in burden_cols:
+            burden_cols.remove(key_burden)
+            burden_cols = [key_burden] + burden_cols
+        subset_burden = subset_burden[burden_cols]
+        
+        # Plot the stacked bar plot for tumor burden
+        if palette is not None:
+            pal_burden = {f"{k}_burden": v for k, v in palette.items()}
 
-    # Get the last subplot to add the legend to
-    last_ax = axs[-1]
+            cycle_colors = plt.rcParams.get("axes.prop_cycle", None)
+            cycle_colors = (cycle_colors.by_key().get("color", []) if cycle_colors is not None else [])
+            cycle_idx = 0
+            colors = []
+            for col in subset_burden.columns:
+                if col in pal_burden:
+                    colors.append(pal_burden[col])
+                elif "residual" in str(col).lower():
+                    colors.append("#7F7F7F")
+                elif cycle_colors:
+                    colors.append(cycle_colors[cycle_idx % len(cycle_colors)])
+                    cycle_idx += 1
+                else:
+                    colors.append("#1F77B4")
+
+            subset_burden.plot(kind='bar', stacked=True, color=colors, width=0.90, legend=False, ax=ax_bottom)
+        else:
+            subset_burden.plot(kind='bar', stacked=True, width=0.90, legend=False, ax=ax_bottom)
+        
+        # Only the leftmost subplot gets the y-axis label
+        if idx == 0:
+            ax_bottom.set_ylabel('tumor burden', fontsize=12)
+        else:
+            ax_bottom.set_ylabel('')
+            ax_bottom.tick_params(labelleft=False)
+        ax_bottom.set_ylim(0, 1)
+        ax_bottom.set_xlim(-0.5, n_samples - 0.5)
+        
+        # Set x-axis label only for bottom row
+        ax_bottom.set_xlabel('')
+        
+        # Rotate x-axis labels
+        ax_bottom.tick_params(axis='x', rotation=90)
+
+    # Get the last subplot from top row to add the legend
+    last_ax = axs[0, -1]
     # Create a legend for the last subplot and place it outside, higher and to the right
     handles, labels = last_ax.get_legend_handles_labels()
     # Reorder to match the stacking order (bottom to top in the bars)
     handles = handles[::-1]
     labels = labels[::-1]
+    # Remove "_fraction" suffix from labels
+    labels = [label.replace('_fraction', '') for label in labels]
     # Place legend outside the rightmost subplot, higher up
     last_ax.legend(handles, labels, title="Subtypes", 
                 bbox_to_anchor=(1.15, 1.0), 
@@ -318,76 +469,23 @@ def plot_keraon(predictions: pd.DataFrame, direct: str, key: str, threshold: flo
     # Add a figure-level title.
     # If key ends with '_fraction', remove that for the presence description.
     key_display = key.replace('_fraction', '')
-    fig.suptitle(f"Mixture estimates ({key_display} presence based on {key} thresholding)", fontsize=16, y=1.02)
+    fig.suptitle(
+        f"Mixture estimates (positive label based on {key_display} thresholding)",
+        fontsize=16,
+        y=0.98,
+    )
     
-    plt.tight_layout(rect=[0, 0, 0.9, 0.95])
-    plt.savefig(direct + 'Keraon_mixture-predictions.pdf', bbox_inches="tight")
+    plt.tight_layout(rect=[0, 0, 0.9, 0.96])
+    plt.savefig(os.path.join(direct, 'Keraon_mixture-predictions.pdf'), bbox_inches="tight")
     plt.close()
 
 
-def plot_roc(df: pd.DataFrame, direct: str, key: str) -> list:
-    """
-    Plot the Receiver Operating Characteristic (ROC) curve for binary classification.
-
-    Parameters:
-       df (pd.DataFrame): The input dataframe. It should contain a 'Truth' column with class labels and a column with predicted probabilities for the subtype of interest.
-                          If multiple subtypes are present, they should be separated by commas, e.g. "Subtype1,Subtype2".
-       direct (str): The output directory.
-       key (str): The name of the subtype/label to base thresholding on.
-
-    Returns:
-       list: A list containing false positive rates, true positive rates, and the area under the ROC curve.
-    """
-    # Create a new figure
-    plt.figure(figsize=(8, 8))
-
-    # Convert multiclass labels into binary labels
-    if "fraction" in key:
-        df.loc[:, 'Truth'] = df['Truth'].apply(lambda x: 1 if any(label.strip() == key.rsplit('_fraction', 1)[0] for label in x.split(',')) else 0)
-    else:
-        df.loc[:, 'Truth'] = df['Truth'].apply(lambda x: 1 if any(label.strip() == key for label in x.split(',')) else 0)
-
-    # Sort the dataframe by truth values
-    df = df.sort_values(by='Truth')
-
-    # Get the truth values and predicted probabilities
-    truths = df['Truth'].to_numpy(dtype=int)
-    predictions = df[key].to_numpy(dtype=float)
-
-    # Calculate the ROC curve
-    fpr, tpr, thresholds = metrics.roc_curve(truths, predictions)
-
-    # Calculate the area under the ROC curve
-    auc = metrics.auc(fpr, tpr)
-
-    # Sensitivity = TPR = TP / (TP + FN)
-    # Specificity = 1 - FPR = TN / (TN + FP)
-    # Youden's J statistic = Sensitivity + Specificity - 1 = TPR + (1 - FPR) - 1 = TPR - FPR
-    J = tpr - fpr
-
-    # The optimal threshold is the one that maximizes the Youden's J statistic
-    optimal_idx = np.argmax(J)
-    optimal_threshold = thresholds[optimal_idx]
-
-    # Plot the ROC curve
-    plt.plot(fpr, tpr, label='Mean ROC (AUC = % 0.2f )' % auc, lw=2)
-    plt.xlabel('False Positive Rate')
-    plt.ylabel('True Positive Rate')
-    plt.suptitle(key + ' binary prediction ROC')
-    plt.title('100% TPR threshold: ' + str(round(thresholds[list(tpr).index(1.)], 4)) +
-              '\n"Optimal" (Youden) threshold: ' + str(round(optimal_threshold, 4)))
-    plt.legend(bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0)
-
-    # Save the figure
-    plt.savefig(direct + key + '_ROC.pdf', bbox_inches="tight")
-
-    # Close the figure
-    plt.close()
-
-    return [fpr, tpr, auc, optimal_threshold]
-
-
-def plot_combined_feature_distributions(df_train: pd.DataFrame, df_test: pd.DataFrame, output_directory: str, palette: dict):
+def plot_combined_feature_distributions(
+    df_train: pd.DataFrame,
+    df_test: pd.DataFrame,
+    output_directory: str,
+    palette: Mapping[str, str],
+) -> None:
     """
     Plots and saves combined feature distributions for training and test datasets.
 
